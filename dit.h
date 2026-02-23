@@ -1097,7 +1097,7 @@ static void dit_ggml_generate(
 
     fprintf(stderr, "[DiT] Batch N=%d, T=%d, S=%d, enc_S=%d\n", N, T, S, enc_S);
 
-    // Build graph once (shapes are constant across steps)
+    // Graph context (generous fixed allocation, shapes are constant across steps)
     size_t ctx_size = ggml_tensor_overhead() * 8192 + ggml_graph_overhead_custom(8192, false);
     std::vector<uint8_t> ctx_buf(ctx_size);
 

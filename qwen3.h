@@ -342,7 +342,7 @@ static void qwen3_forward(Qwen3GGML * m, const int * token_ids, int S, float * o
     const Qwen3Config & c = m->cfg;
     int H = c.hidden_size;
 
-    // Graph context
+    // Graph context (generous fixed allocation)
     size_t ctx_size = 2048 * ggml_tensor_overhead() + ggml_graph_overhead();
     struct ggml_init_params gp = { ctx_size, NULL, true };
     struct ggml_context * ctx = ggml_init(gp);

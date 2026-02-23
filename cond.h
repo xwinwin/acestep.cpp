@@ -160,7 +160,7 @@ static void cond_ggml_forward(CondGGML * m,
     int H = 2048;
     bool has_timbre = (timbre_feats != NULL && S_ref > 0);
 
-    // Build graph
+    // Graph context (generous fixed allocation)
     size_t ctx_size = 4096 * ggml_tensor_overhead() + ggml_graph_overhead();
     struct ggml_init_params gp = { ctx_size, NULL, true };
     struct ggml_context * ctx = ggml_init(gp);
