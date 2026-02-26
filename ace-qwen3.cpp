@@ -1,6 +1,7 @@
 // ace-qwen3.cpp : ACE-Step 5Hz LM inference (GGML)
 // Qwen3 causal LM: CoT reasoning + audio code generation
 // ace-qwen3: Qwen3 causal LM for ACE-Step music generation (GGML backend)
+
 #include "qwen3-lm.h"
 #include "bpe.h"
 #include "request.h"
@@ -35,10 +36,6 @@ struct Timer {
 #define AUDIO_CODE_BASE     151669
 #define AUDIO_CODE_COUNT    65535
 
-//
-// Sampling
-//
-
 struct TokenProb {
     int id;
     float prob;
@@ -46,11 +43,20 @@ struct TokenProb {
 
 // Sampling: temperature -> top_k -> top_p -> softmax -> multinomial
 // Matches nano-vLLM Sampler: div_(temperature) -> apply_top_k_top_p -> softmax -> sample
+//
+// Optimization: when top_k=0, apply effective_k=256 pre-filter via nth_element O(N).
+// Then top_p only sorts the K survivors (~256) instead of all V (~65k).
+// O(V*log(V)) sort on full vocab becomes O(V) nth_element + O(K*log(K)) sort on K<<V.
 static int sample_top_k_p(float * logits, int V, float temperature, float top_p, int top_k, std::mt19937 & rng) {
     if (temperature <= 0.0f) {
         // greedy
         return (int)(std::max_element(logits, logits + V) - logits);
     }
+
+    // Pre-allocated buffers (avoid malloc/free per call)
+    static thread_local std::vector<float> tmp_buf;
+    static thread_local std::vector<TokenProb> sorted_buf;
+    static thread_local std::vector<float> probs_buf;
 
     // 1. temperature (matches nano-vLLM: logits.float().div_(temperatures))
     float inv_temp = 1.0f / temperature;
@@ -58,44 +64,52 @@ static int sample_top_k_p(float * logits, int V, float temperature, float top_p,
         logits[i] *= inv_temp;
 
     // 2. top_k: keep top K values, set rest to -inf
-    //    nano-vLLM: topk(k) returns k-th largest as threshold, mask < threshold
-    if (top_k > 0 && top_k < V) {
-        std::vector<float> tmp(logits, logits + V);
-        std::nth_element(tmp.begin(), tmp.begin() + (top_k - 1), tmp.end(), std::greater<float>());
-        float threshold = tmp[top_k - 1];
+    //    When top_k=0 (disabled), use effective_k to pre-filter for top_p.
+    //    256 is conservative: with temp=0.85, top_p=0.9 typically selects ~50-200 tokens.
+    int effective_k = (top_k > 0) ? top_k : 256;
+    if (effective_k < V) {
+        tmp_buf.resize(V);
+        memcpy(tmp_buf.data(), logits, V * sizeof(float));
+        std::nth_element(tmp_buf.begin(), tmp_buf.begin() + (effective_k - 1), tmp_buf.end(), std::greater<float>());
+        float threshold = tmp_buf[effective_k - 1];
         for (int i = 0; i < V; i++)
             if (logits[i] < threshold) logits[i] = -INFINITY;
     }
 
-    // 3. top_p: nucleus filter on temp-scaled logits (matches nano-vLLM: softmax on scaled logits)
-    //    nano-vLLM sorts ascending, cumsum, masks cumsum <= (1-p), keeps last element.
-    //    Equivalent descending: mask tokens where cumsum_before >= top_p (shift-right).
+    // 3. top_p: nucleus filter: only sort surviving (non-masked) tokens
     if (top_p > 0.0f && top_p < 1.0f) {
-        std::vector<TokenProb> sorted(V);
-        for (int i = 0; i < V; i++) sorted[i] = {i, logits[i]};
-        std::sort(sorted.begin(), sorted.end(),
+        // Compact: collect only finite logits (survived top_k)
+        sorted_buf.clear();
+        for (int i = 0; i < V; i++)
+            if (logits[i] > -1e30f)
+                sorted_buf.push_back({i, logits[i]});
+
+        int K = (int)sorted_buf.size();
+        if (K > 0) {
+        std::sort(sorted_buf.begin(), sorted_buf.end(),
                   [](const TokenProb & a, const TokenProb & b) { return a.prob > b.prob; });
 
         // softmax of temp-scaled logits for cumsum
-        float max_val = sorted[0].prob;
+        float max_val = sorted_buf[0].prob;
         float sum = 0.0f;
-        std::vector<float> probs(V);
-        for (int i = 0; i < V; i++) {
-            probs[i] = expf(sorted[i].prob - max_val);
-            sum += probs[i];
+        probs_buf.resize(K);
+        for (int i = 0; i < K; i++) {
+            probs_buf[i] = expf(sorted_buf[i].prob - max_val);
+            sum += probs_buf[i];
         }
         float inv = 1.0f / sum;
 
         // cumulative sum, test before accumulating (shift-right trick)
         float cum = 0.0f;
-        for (int i = 0; i < V; i++) {
-            if (i > 0 && cum >= top_p)  // i>0: always keep at least first token
-                logits[sorted[i].id] = -INFINITY;
-            cum += probs[i] * inv;
+        for (int i = 0; i < K; i++) {
+            if (i > 0 && cum >= top_p)
+                logits[sorted_buf[i].id] = -INFINITY;
+            cum += probs_buf[i] * inv;
         }
+        } // K > 0
     }
 
-    // 4. softmax -> multinomial (temperature already applied)
+    // 4. softmax -> multinomial (only non-masked tokens matter)
     float max_val = -INFINITY;
     for (int i = 0; i < V; i++)
         if (logits[i] > max_val) max_val = logits[i];
@@ -115,10 +129,7 @@ static int sample_top_k_p(float * logits, int V, float temperature, float top_p,
     return 0;
 }
 
-//
 // BPE decode (token IDs -> text)
-//
-
 static std::string bpe_decode(const BPETokenizer & bpe, const std::vector<int> & ids) {
     static std::unordered_map<int, uint8_t> byte_dec;
     static bool init = false;
@@ -152,10 +163,7 @@ static std::string bpe_decode(const BPETokenizer & bpe, const std::vector<int> &
     return result;
 }
 
-//
 // ACE-Step prompt
-//
-
 struct AcePrompt {
     std::string caption;
     std::string lyrics;
@@ -166,10 +174,7 @@ struct AcePrompt {
     std::string vocal_language;
 };
 
-//
 // CoT parsing (extract metadata + lyrics from LLM Phase1 output)
-//
-
 static bool parse_cot_and_lyrics(const std::string & text, AcePrompt * out) {
     // Extract CoT content between <think>...</think>
     size_t ts = text.find("<think>");
@@ -265,10 +270,7 @@ static bool parse_cot_and_lyrics(const std::string & text, AcePrompt * out) {
     return (out->bpm > 0 || out->duration > 0);
 }
 
-//
 // Prompt building (Qwen3 chat template)
-//
-
 static std::vector<int> build_lm_prompt(BPETokenizer & bpe, const AcePrompt & prompt) {
     std::vector<int> ids;
     auto append = [&](const std::string & text) {
@@ -429,10 +431,7 @@ static std::vector<int> build_custom_prompt(BPETokenizer & bpe, const char * sys
     return ids;
 }
 
-//
 // Prefix tree for FSM constrained decoding
-//
-
 struct PrefixTree {
     // Maps prefix (token sequence) to set of valid next tokens
     std::map<std::vector<int>, std::vector<int>> nodes;
@@ -453,10 +452,7 @@ struct PrefixTree {
     }
 };
 
-//
 // Metadata FSM (constrained decoding for CoT fields)
-//
-
 struct MetadataFSM {
     enum State {
         BPM_NAME, BPM_VALUE,
@@ -605,11 +601,11 @@ struct MetadataFSM {
     State next_name_state() const {
         switch (state) {
             case BPM_NAME:      case BPM_VALUE:      return CAPTION_NAME;
-            case CAPTION_NAME:  case CAPTION_VALUE:   return DURATION_NAME;
-            case DURATION_NAME: case DURATION_VALUE:  return KEYSCALE_NAME;
-            case KEYSCALE_NAME: case KEYSCALE_VALUE:  return LANGUAGE_NAME;
-            case LANGUAGE_NAME: case LANGUAGE_VALUE:   return TIMESIG_NAME;
-            case TIMESIG_NAME:  case TIMESIG_VALUE:   return THINK_END;
+            case CAPTION_NAME:  case CAPTION_VALUE:  return DURATION_NAME;
+            case DURATION_NAME: case DURATION_VALUE: return KEYSCALE_NAME;
+            case KEYSCALE_NAME: case KEYSCALE_VALUE: return LANGUAGE_NAME;
+            case LANGUAGE_NAME: case LANGUAGE_VALUE: return TIMESIG_NAME;
+            case TIMESIG_NAME:  case TIMESIG_VALUE:  return THINK_END;
             default: return CODES;
         }
     }
@@ -705,11 +701,7 @@ struct MetadataFSM {
     }
 };
 
-//
 // Generation
-//
-
-
 // Text-only generation (Phase 1: no CFG, stops at EOS)
 static std::string codes_to_string(const std::vector<int> & codes);
 
@@ -899,11 +891,19 @@ static std::vector<std::string> generate_phase1_batch(
 
             // After </think>: audio code constraint unless lyrics_mode
             if (seqs[i].codes_phase && !lyrics_mode) {
-                for (int v = 0; v < AUDIO_CODE_BASE; v++)
-                    if (v != TOKEN_IM_END) lc[v] = -1e9f;
+                for (int v = TOKEN_IM_END + 1; v < AUDIO_CODE_BASE; v++)
+                    lc[v] = -1e9f;
             }
 
-            int tok = sample_top_k_p(lc, V, temperature, top_p, top_k, seqs[i].rng);
+            int tok;
+            if (seqs[i].codes_phase && !lyrics_mode) {
+                // Restricted sampling: only [TOKEN_IM_END..V)
+                int V_eff = V - TOKEN_IM_END;
+                tok = sample_top_k_p(lc + TOKEN_IM_END, V_eff,
+                                     temperature, top_p, top_k, seqs[i].rng) + TOKEN_IM_END;
+            } else {
+                tok = sample_top_k_p(lc, V, temperature, top_p, top_k, seqs[i].rng);
+            }
 
             if (tok == TOKEN_IM_END) {
                 seqs[i].done = true;
@@ -1055,16 +1055,17 @@ static std::vector<std::string> run_phase2_batch(
         uncond_sets[i] = N + i;
     }
 
-    // Batched decode loop
+    // Batched decode loop, partial LM head: only project [TOKEN_IM_END..V)
     Timer t_decode;
-    std::vector<float> logits_cond(V * N);
-    std::vector<float> logits_uncond(V * N);
+    int V_eff = V - TOKEN_IM_END; // 65559 vs 217204
+    std::vector<float> logits_cond((size_t)V_eff * N);
+    std::vector<float> logits_uncond((size_t)V_eff * N);
     std::vector<int> tokens(N);
 
     // CFG: single forward with 2*N (cond + uncond)
     int N2 = use_cfg ? 2 * N : N;
     std::vector<int> tokens_2n(N2), sets_2n(N2);
-    std::vector<float> logits_2n((size_t)V * N2);
+    std::vector<float> logits_2n((size_t)V_eff * N2);
     if (use_cfg) {
         for (int i = 0; i < N; i++) {
             sets_2n[i] = cond_sets[i];
@@ -1087,29 +1088,30 @@ static std::vector<std::string> run_phase2_batch(
                 tokens_2n[i] = tokens[i];
                 tokens_2n[N + i] = tokens[i];
             }
-            qw3lm_forward_batch(m, tokens_2n.data(), sets_2n.data(), N2, logits_2n.data());
-            memcpy(logits_cond.data(),   logits_2n.data(),                    (size_t)V * N * sizeof(float));
-            memcpy(logits_uncond.data(), logits_2n.data() + (size_t)V * N,    (size_t)V * N * sizeof(float));
+            qw3lm_forward_batch(m, tokens_2n.data(), sets_2n.data(), N2, logits_2n.data(), TOKEN_IM_END, V_eff);
+            memcpy(logits_cond.data(), logits_2n.data(),                       (size_t)V_eff * N * sizeof(float));
+            memcpy(logits_uncond.data(), logits_2n.data() + (size_t)V_eff * N, (size_t)V_eff * N * sizeof(float));
         } else {
-            qw3lm_forward_batch(m, tokens.data(), cond_sets.data(), N, logits_cond.data());
+            qw3lm_forward_batch(m, tokens.data(), cond_sets.data(), N, logits_cond.data(), TOKEN_IM_END, V_eff);
         }
 
-        // Per-sequence: CFG combine + sample
+        // Per-sequence: CFG combine + sample (logits are [V_eff] starting at TOKEN_IM_END)
         for (int i = 0; i < N; i++) {
             if (seqs[i].done) continue;
 
-            float * lc = logits_cond.data() + (size_t)i * V;
+            float * lc = logits_cond.data() + (size_t)i * V_eff;
             if (use_cfg) {
-                float * lu = logits_uncond.data() + (size_t)i * V;
-                for (int v = 0; v < V; v++)
+                float * lu = logits_uncond.data() + (size_t)i * V_eff;
+                for (int v = 0; v < V_eff; v++)
                     lc[v] = lu[v] + cfg_scale * (lc[v] - lu[v]);
             }
 
-            // Only audio codes + EOS
-            for (int v = 0; v < AUDIO_CODE_BASE; v++)
-                if (v != TOKEN_IM_END) lc[v] = -1e9f;
-
-            int tok = sample_top_k_p(lc, V, temperature, top_p, top_k, seqs[i].rng);
+            // Mask the 24-token gap: indices 1..AUDIO_CODE_BASE-TOKEN_IM_END-1
+            // (index 0 = TOKEN_IM_END = EOS, index 24+ = audio codes)
+            for (int v = 1; v < AUDIO_CODE_BASE - TOKEN_IM_END; v++)
+                lc[v] = -1e9f;
+            int tok = sample_top_k_p(lc, V_eff,
+                                     temperature, top_p, top_k, seqs[i].rng) + TOKEN_IM_END;
             seqs[i].last_token = tok;
 
             if (tok == TOKEN_IM_END) {
@@ -1143,10 +1145,7 @@ static std::vector<std::string> run_phase2_batch(
     return results;
 }
 
-//
 // CLI
-//
-
 static void usage(const char * prog) {
     fprintf(stderr,
         "Usage: %s --request <json> --model <gguf> [options]\n"
@@ -1232,7 +1231,7 @@ int main(int argc, char ** argv) {
     if (seed < 0) {
         std::random_device rd;
         seed = (int64_t)rd() << 32 | rd();
-        if (seed < 0) seed = -seed;  // keep positive
+        if (seed < 0) seed = -seed; // keep positive
     }
     req.seed = seed;
 
