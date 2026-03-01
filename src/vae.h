@@ -248,19 +248,27 @@ static void vae_ggml_load(VAEGGML * m, const char * path) {
     vae_load_snake_inv(m->sb, gf, "decoder.snake1.beta");
     vae_fuse_wn(m->c2w, gf, "decoder.conv2");
 
-    fprintf(stderr, "[VAE] Loaded: 5 blocks, upsample=1920x\n");
+    fprintf(stderr, "[VAE] Loaded: 5 blocks, upsample=1920x, BF16 activations\n");
     gf_close(&gf);
 }
 
 // Graph building
 // Snake activation (fused): y = x + sin^2(a * x) * inv_b
 // x: [T, C], exp_a: [1, C], inv_b: [1, C] (pre-computed at load)
+// Casts to BF16 before snake, back to F32 after.
 static struct ggml_tensor * vae_snake(
         struct ggml_context * ctx,
         struct ggml_tensor * x,
         struct ggml_tensor * exp_a,
         struct ggml_tensor * inv_b) {
-    return ggml_snake(ctx, x, exp_a, inv_b);
+    if (x->type == GGML_TYPE_F32) {
+        x = ggml_cast(ctx, x, GGML_TYPE_BF16);
+    }
+    x = ggml_snake(ctx, x, exp_a, inv_b);
+    if (x->type != GGML_TYPE_F32) {
+        x = ggml_cast(ctx, x, GGML_TYPE_F32);
+    }
+    return x;
 }
 
 // Conv1d + bias: data [T, IC] -> [T_out, OC]
@@ -298,11 +306,21 @@ static struct ggml_tensor * vae_conv_t1d(
     // w: [IC, K*OC]  xt: [IC, T_in]  ->  col: [K*OC, T_in]
     struct ggml_tensor * col = ggml_mul_mat(ctx, w, xt);
 
-    // Step 3: col2im - scatter-add columns to signal, fused padding crop
+    // Step 3: cast to BF16 before col2im_1d
+    if (col->type == GGML_TYPE_F32) {
+        col = ggml_cast(ctx, col, GGML_TYPE_BF16);
+    }
+
+    // Step 4: col2im - scatter-add columns to signal, fused padding crop
     // [K*OC, T_in] -> [T_out, OC] where T_out = (T_in-1)*stride + K - 2*padding
     struct ggml_tensor * y = ggml_col2im_1d(ctx, col, stride, oc, padding);
 
-    // Step 4: Add bias
+    // Step 5: cast back to F32
+    if (y->type != GGML_TYPE_F32) {
+        y = ggml_cast(ctx, y, GGML_TYPE_F32);
+    }
+
+    // Step 6: Add bias
     if (b) {
         struct ggml_tensor * b2d = ggml_reshape_2d(ctx, b, 1, b->ne[0]);
         y = ggml_add(ctx, y, b2d);

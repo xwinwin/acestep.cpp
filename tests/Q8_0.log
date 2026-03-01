@@ -41,8 +41,8 @@ Using precomputed LM hints
   dit_step6_xt                         0.988641
   dit_step7_vt                         0.970144
   dit_x0                               0.979969
-  vae_audio                            0.905563
-  vae_audio (STFT cosine)              0.976538
+  vae_audio                            0.905525
+  vae_audio (STFT cosine)              0.976530
 [Turbo] Error growth GGML vs Python
   stage                         cos    max_err   mean_err     mean_A      std_A     mean_B      std_B
   dit_step0_xt             0.999948   0.134961   0.006551  -0.002307   0.972901  -0.002342   0.972003
@@ -114,8 +114,8 @@ Using precomputed LM hints
   dit_step49_vt_cond                   0.980854
   dit_step49_vt                        0.920647
   dit_x0                               0.988696
-  vae_audio                            0.944456
-  vae_audio (STFT cosine)              0.974763
+  vae_audio                            0.944426
+  vae_audio (STFT cosine)              0.974764
 [SFT] Error growth GGML vs Python
   stage                         cos    max_err   mean_err     mean_A      std_A     mean_B      std_B
   dit_step0_xt             0.999998   0.038422   0.002097  -0.001714   0.980004  -0.001741   0.980402
