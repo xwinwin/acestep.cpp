@@ -47,6 +47,7 @@ struct Qwen3LM {
     ggml_backend_t cpu_backend;
     ggml_backend_sched_t sched;
     bool use_flash_attn;
+    bool clamp_fp16; // clamp hidden state on sub-Ampere CUDA (FP16 accumulation overflow)
 
     // KV cache: per-set, per-layer [D, max_seq, Nkv] f16
     struct ggml_context  * kv_ctx;
@@ -145,6 +146,10 @@ static void qw3lm_init_backend(Qwen3LM * m) {
     m->cpu_backend = bp.cpu_backend;
     m->sched = backend_sched_new(bp, 8192);
     m->use_flash_attn = true;
+    m->clamp_fp16 = (bp.gpu_cc > 0 && bp.gpu_cc < 800);
+    if (m->clamp_fp16) {
+        fprintf(stderr, "[LM] FP16 clamp enabled (cc=%d)\n", bp.gpu_cc);
+    }
 }
 
 // Allocate KV cache
@@ -414,6 +419,9 @@ static void qw3lm_forward(Qwen3LM * m, const int * token_ids, int n_tokens,
         norm = qwen3_rms_norm(ctx, hidden, ly->post_attn_layernorm, c.rms_norm_eps);
         struct ggml_tensor * mlp = qwen3_build_mlp(ctx, ly, norm, n_tokens);
         hidden = ggml_add(ctx, hidden, mlp);
+        if (m->clamp_fp16) {
+            hidden = ggml_clamp(ctx, hidden, -65504.0f, 65504.0f);
+        }
     }
 
     // Final norm
@@ -630,6 +638,9 @@ static void qw3lm_forward_batch(Qwen3LM * m, const int * token_ids,
         norm = qwen3_rms_norm(ctx, hidden, ly->post_attn_layernorm, c.rms_norm_eps);
         struct ggml_tensor * mlp = qwen3_build_mlp(ctx, ly, norm, N);
         hidden = ggml_add(ctx, hidden, mlp);
+        if (m->clamp_fp16) {
+            hidden = ggml_clamp(ctx, hidden, -65504.0f, 65504.0f);
+        }
     }
 
     // Final norm + LM head

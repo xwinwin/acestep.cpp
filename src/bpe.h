@@ -101,7 +101,7 @@ static std::vector<std::string> gpt2_pre_tokenize(const std::string &text) {
                     // case-insensitive compare
                     for (int k = 0; k < slen; k++) {
                         char c1 = rest[k], c2 = suffix[k];
-                        if (c1 >= 'A' && c1 <= 'Z') c1 += 32;
+                        if (c1 >= 'A' && c1 <= 'Z') c1 = (char)(c1 + 32);
                         if (c1 != c2) return false;
                     }
                     // next char should NOT be a letter

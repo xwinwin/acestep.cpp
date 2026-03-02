@@ -70,6 +70,7 @@ struct CondGGML {
     ggml_backend_t cpu_backend;
     ggml_backend_sched_t sched;
     bool use_flash_attn;
+    bool clamp_fp16; // clamp encoder output on sub-Ampere CUDA (FP16 accumulation overflow)
     WeightCtx wctx;
 };
 
@@ -80,6 +81,12 @@ static void cond_ggml_init_backend(CondGGML * m) {
     m->cpu_backend = bp.cpu_backend;
     m->sched = backend_sched_new(bp, 8192);
     m->use_flash_attn = true;
+    // Sub-Ampere tensor cores accumulate in FP16 (max 65504).
+    // Deep encoders can overflow to inf, causing NaN in rms_norm.
+    m->clamp_fp16 = (bp.gpu_cc > 0 && bp.gpu_cc < 800);
+    if (m->clamp_fp16) {
+        fprintf(stderr, "[CondEncoder] FP16 clamp enabled (cc=%d)\n", bp.gpu_cc);
+    }
 }
 
 // Load from ACEStep DiT GGUF
@@ -196,6 +203,9 @@ static void cond_ggml_forward(CondGGML * m,
                                      lyric_h, lyric_pos, layer_mask, S_lyric,
                                      m->use_flash_attn);
     }
+    if (m->clamp_fp16) {
+        lyric_h = ggml_clamp(ctx, lyric_h, -65504.0f, 65504.0f);
+    }
     lyric_h = qwen3_rms_norm(ctx, lyric_h, m->lyric_norm, m->lyric_cfg.rms_norm_eps);
 
     ggml_set_name(lyric_h, "lyric_out");
@@ -241,6 +251,9 @@ static void cond_ggml_forward(CondGGML * m,
             timbre_h = qwen3_build_layer(ctx, m->timbre_cfg, &m->timbre_layers[i],
                                           timbre_h, timbre_pos, layer_mask, S_ref,
                                           m->use_flash_attn);
+        }
+        if (m->clamp_fp16) {
+            timbre_h = ggml_clamp(ctx, timbre_h, -65504.0f, 65504.0f);
         }
         timbre_h = qwen3_rms_norm(ctx, timbre_h, m->timbre_norm, m->timbre_cfg.rms_norm_eps);
 
