@@ -3,7 +3,6 @@
 // request.h - AceStep generation request (JSON serialization)
 //
 // Pure data container + JSON read/write. Zero business logic.
-// Aligned with Python GenerationParams (inference.py:39) and API /release_task.
 //
 
 #include <cstdint>
