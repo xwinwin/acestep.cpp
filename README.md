@@ -134,6 +134,25 @@ only differ by initial noise, producing subtle variations of the same piece
 (slightly different timbres, minor rhythmic shifts). Use LM batching for
 diversity, DiT batching for cherry-picking the best render.
 
+Transform an existing song with `--src-audio` (no LLM needed):
+
+```bash
+cat > /tmp/cover.json << 'EOF'
+{
+    "caption": "Jazz piano cover with brushed drums and walking bass",
+    "lyrics": "[Instrumental]",
+    "audio_cover_strength": 0.5
+}
+EOF
+
+./build/dit-vae \
+    --src-audio song.wav
+    --request /tmp/cover.json \
+    --text-encoder models/Qwen3-Embedding-0.6B-Q8_0.gguf \
+    --dit models/acestep-v15-turbo-Q8_0.gguf \
+    --vae models/vae-BF16.gguf \
+```
+
 Ready-made examples in `examples/`:
 
 ```bash
@@ -180,6 +199,44 @@ The DiT was trained with this exact string as the no-vocal condition.
 **Passthrough** (`audio_codes` present): LLM is skipped entirely.
 Run `dit-vae` to decode existing codes. See `examples/dit-only.json`.
 
+**Reference audio** (`--src-audio` on CLI): no LLM needed. The source WAV
+is VAE-encoded to latent space and used as DiT context instead of silence.
+`audio_cover_strength` in the JSON controls how many DiT steps see the source
+(0.5 = half the steps use source context, half use silence). The caption
+steers the style while the source provides structure, melody, and rhythm.
+Duration is determined by the source audio.
+
+**Repaint** (`--src-audio` + `repainting_start`/`repainting_end` in JSON):
+regenerates a time region of the source audio while preserving the rest.
+Requires the **SFT model** (the turbo model is less performant for this task).
+The DiT receives a binary mask: 1.0 inside the region (generate), 0.0 outside
+(keep original). Source latents outside the region provide context; silence
+fills the repaint zone. Both fields default to -1
+(inactive). Set one or both to activate: -1 on start means 0s, -1 on end means
+source duration. `audio_cover_strength` is ignored in repaint mode (the mask
+handles everything).
+
+```bash
+cat > /tmp/repaint.json << 'EOF'
+{
+    "caption": "Smooth jazz guitar solo with reverb",
+    "lyrics": "[Instrumental]",
+    "repainting_start": 10.0,
+    "repainting_end": 25.0,
+    "inference_steps": 50,
+    "guidance_scale": 7.0,
+    "shift": 1.0
+}
+EOF
+
+./build/dit-vae \
+    --src-audio song.wav \
+    --request /tmp/repaint.json \
+    --text-encoder models/Qwen3-Embedding-0.6B-Q8_0.gguf \
+    --dit models/acestep-v15-sft-Q8_0.gguf \
+    --vae models/vae-BF16.gguf
+```
+
 ## Request JSON reference
 
 Only `caption` is required. All other fields default to "unset" which means
@@ -187,23 +244,26 @@ the LLM fills them, or a sensible runtime default is applied.
 
 ```json
 {
-    "caption":            "",
-    "lyrics":             "",
-    "bpm":                0,
-    "duration":           0,
-    "keyscale":           "",
-    "timesignature":      "",
-    "vocal_language":     "unknown",
-    "seed":               -1,
-    "lm_temperature":     0.85,
-    "lm_cfg_scale":       2.0,
-    "lm_top_p":           0.9,
-    "lm_top_k":           0,
-    "lm_negative_prompt": "",
-    "audio_codes":        "",
-    "inference_steps":    8,
-    "guidance_scale":     0.0,
-    "shift":              3.0
+    "caption":              "",
+    "lyrics":               "",
+    "bpm":                  0,
+    "duration":             0,
+    "keyscale":             "",
+    "timesignature":        "",
+    "vocal_language":       "unknown",
+    "seed":                 -1,
+    "lm_temperature":       0.85,
+    "lm_cfg_scale":         2.0,
+    "lm_top_p":             0.9,
+    "lm_top_k":             0,
+    "lm_negative_prompt":   "",
+    "audio_codes":          "",
+    "inference_steps":      8,
+    "guidance_scale":       0.0,
+    "shift":                3.0,
+    "audio_cover_strength": 0.5,
+    "repainting_start":    -1,
+    "repainting_end":      -1
 }
 ```
 
@@ -252,7 +312,22 @@ use `seed+0`, `seed+1`, ... `seed+N-1`.
 **`audio_codes`** (string, default `""`)
 Comma-separated FSQ token IDs produced by ace-qwen3. When non-empty, the
 entire LLM pass is skipped and dit-vae decodes these codes directly
-(passthrough / cover mode).
+(passthrough mode).
+
+**`audio_cover_strength`** (float, default `0.5`)
+Only used with `--src-audio`. Fraction of DiT steps that see the source audio
+as context. At `1.0` all steps use the source (near passthrough). At `0.0` no
+steps use the source (pure text2music, source is ignored). At `0.5` the first
+half of the steps are guided by the source structure, the second half are free
+to follow the caption. Lower values give more creative freedom, higher values
+preserve more of the original.
+
+**`repainting_start`** (float seconds, default `-1` = inactive)
+**`repainting_end`** (float seconds, default `-1` = inactive)
+Only used with `--src-audio`. When one or both are >= 0, repaint mode activates:
+the DiT regenerates the `[start, end)` time region while preserving everything
+else. `-1` on start means 0s (beginning), `-1` on end means source duration
+(end). Error if end <= start after resolve. `audio_cover_strength` is ignored.
 
 ### LM sampling (ace-qwen3)
 
@@ -334,6 +409,9 @@ Required:
   --dit <gguf>            DiT GGUF file
   --vae <gguf>            VAE GGUF file
 
+Reference audio:
+  --src-audio <wav>       Source audio (48kHz stereo WAV)
+
 Batch:
   --batch <N>             DiT variations per request (default: 1, max 9)
 
@@ -349,8 +427,11 @@ Debug:
 ```
 
 Models are loaded once and reused across all requests.
+When `--src-audio` is provided, the source WAV is VAE-encoded once and
+injected as DiT context for every request. `audio_cover_strength` in the
+JSON controls how many steps use the source (default 0.5).
 
-## neural-codec
+## neural-codec reference
 
 GGML-native neural audio codec based on the Oobleck VAE encoder and decoder.
 Serves two purposes: validating the precision of the full VAE chain (encode +
@@ -441,18 +522,18 @@ This project started from a simple idea: a Telegram bot using llama.cpp to
 prompt a music generator, and the desire to make GGML sing. No more, no less.
 No cloud, no black box, scriptable and nothing between you and the model.
 
-### LLM modes
+### ace-qwen3
 - [ ] Remaining modes: Understand, Rewrite (single-pass, no audio codes)
-- [ ] Reference audio input: repaint and cover tasks (src_audio + cover_strength)
+
+### dit-vae
+- [x] Reference audio input: `--src-audio` + `audio_cover_strength`
+- [x] Repaint: selective region regeneration (repainting_start/end)
 
 ### Audio I/O
-Current: raw PCM f32 WAV via hand-rolled writer, no external deps.
-Trade-off to document:
-- **Keep as-is**: zero dependencies, clean licensing, works everywhere
-- **ffmpeg pipe**: trivial bash wrapper handles any codec/format, no C++ codec hell
-  - pro: MP3/FLAC/OGG out of the box, input resampling for reference audio
-  - con: runtime dependency, not embedded
-Conclusion pending. Likely ffmpeg as optional external pipe, documented in README.
+The binaries read and write 48kHz stereo 16-bit PCM WAV. No codec library,
+no resampling, no normalization. If you need MP3, FLAC, OGG, or any other
+format, pipe through ffmpeg. The binary does what GGML does best (inference),
+not what ffmpeg already does perfectly.
 
 ### API and interface
 - [ ] JSON HTTP server (minimal, well-documented, stable contract)

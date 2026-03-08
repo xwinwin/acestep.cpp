@@ -17,73 +17,73 @@
 // Lyric/Timbre encoder configs
 static Qwen3Config qwen3_lyric_config() {
     return {
-        /*hidden_size*/       2048,
+        /*hidden_size*/ 2048,
         /*intermediate_size*/ 6144,
-        /*n_heads*/           16,
-        /*n_kv_heads*/        8,
-        /*head_dim*/          128,
-        /*n_layers*/          8,
-        /*rope_theta*/        1000000.0f,
-        /*rms_norm_eps*/      1e-6f,
-        /*is_causal*/         false,
+        /*n_heads*/ 16,
+        /*n_kv_heads*/ 8,
+        /*head_dim*/ 128,
+        /*n_layers*/ 8,
+        /*rope_theta*/ 1000000.0f,
+        /*rms_norm_eps*/ 1e-6f,
+        /*is_causal*/ false,
     };
 }
 
 static Qwen3Config qwen3_timbre_config() {
     return {
-        /*hidden_size*/       2048,
+        /*hidden_size*/ 2048,
         /*intermediate_size*/ 6144,
-        /*n_heads*/           16,
-        /*n_kv_heads*/        8,
-        /*head_dim*/          128,
-        /*n_layers*/          4,
-        /*rope_theta*/        1000000.0f,
-        /*rms_norm_eps*/      1e-6f,
-        /*is_causal*/         false,
+        /*n_heads*/ 16,
+        /*n_kv_heads*/ 8,
+        /*head_dim*/ 128,
+        /*n_layers*/ 4,
+        /*rope_theta*/ 1000000.0f,
+        /*rms_norm_eps*/ 1e-6f,
+        /*is_causal*/ false,
     };
 }
 
 // Struct
 struct CondGGML {
     // Lyric encoder (8L, H=2048)
-    Qwen3Config lyric_cfg;
-    Qwen3Layer  lyric_layers[8];
-    struct ggml_tensor * lyric_embed_w;   // [2048, 1024] ggml = Linear(1024->2048)
-    struct ggml_tensor * lyric_embed_b;   // [2048]
-    struct ggml_tensor * lyric_norm;      // [2048]
+    Qwen3Config          lyric_cfg;
+    Qwen3Layer           lyric_layers[8];
+    struct ggml_tensor * lyric_embed_w;  // [2048, 1024] ggml = Linear(1024->2048)
+    struct ggml_tensor * lyric_embed_b;  // [2048]
+    struct ggml_tensor * lyric_norm;     // [2048]
 
     // Timbre encoder (4L, H=2048)
-    Qwen3Config timbre_cfg;
-    Qwen3Layer  timbre_layers[4];
+    Qwen3Config          timbre_cfg;
+    Qwen3Layer           timbre_layers[4];
     struct ggml_tensor * timbre_embed_w;  // [2048, 64] ggml = Linear(64->2048)
     struct ggml_tensor * timbre_embed_b;  // [2048]
     struct ggml_tensor * timbre_norm;     // [2048]
 
     // Text projector: Linear(1024->2048) no bias
-    struct ggml_tensor * text_proj_w;     // [2048, 1024] ggml
+    struct ggml_tensor * text_proj_w;  // [2048, 1024] ggml
 
     // Null condition embedding (for classifier-free guidance)
-    struct ggml_tensor * null_cond_emb;   // [2048, 1, 1]
+    struct ggml_tensor * null_cond_emb;  // [2048, 1, 1]
 
     // Backend
-    ggml_backend_t backend;
-    ggml_backend_t cpu_backend;
+    ggml_backend_t       backend;
+    ggml_backend_t       cpu_backend;
     ggml_backend_sched_t sched;
-    bool use_flash_attn;
-    bool clamp_fp16; // clamp encoder output on sub-Ampere CUDA (FP16 accumulation overflow)
-    WeightCtx wctx;
+    bool                 use_flash_attn;
+    bool                 clamp_fp16;  // clamp encoder output on sub-Ampere CUDA (FP16 accumulation overflow)
+    WeightCtx            wctx;
 };
 
 // Init
 static void cond_ggml_init_backend(CondGGML * m) {
-    BackendPair bp = backend_init("CondEncoder");
-    m->backend = bp.backend;
-    m->cpu_backend = bp.cpu_backend;
-    m->sched = backend_sched_new(bp, 8192);
+    BackendPair bp    = backend_init("CondEncoder");
+    m->backend        = bp.backend;
+    m->cpu_backend    = bp.cpu_backend;
+    m->sched          = backend_sched_new(bp, 8192);
     m->use_flash_attn = true;
     // Sub-Ampere tensor cores accumulate in FP16 (max 65504).
     // Deep encoders can overflow to inf, causing NaN in rms_norm.
-    m->clamp_fp16 = (bp.gpu_cc > 0 && bp.gpu_cc < 800);
+    m->clamp_fp16     = (bp.gpu_cc > 0 && bp.gpu_cc < 800);
     if (m->clamp_fp16) {
         fprintf(stderr, "[CondEncoder] FP16 clamp enabled (cc=%d)\n", bp.gpu_cc);
     }
@@ -142,8 +142,8 @@ static bool cond_ggml_load(CondGGML * m, const char * gguf_path) {
     }
     gf_close(&gf);
 
-    fprintf(stderr, "[Load] CondEncoder: lyric(%dL), timbre(%dL), text_proj, null_cond\n",
-            m->lyric_cfg.n_layers, m->timbre_cfg.n_layers);
+    fprintf(stderr, "[Load] CondEncoder: lyric(%dL), timbre(%dL), text_proj, null_cond\n", m->lyric_cfg.n_layers,
+            m->timbre_cfg.n_layers);
     return true;
 }
 
@@ -160,20 +160,23 @@ static bool cond_ggml_load(CondGGML * m, const char * gguf_path) {
 //   *out_enc_S:   total sequence length
 //
 // Layout: all arrays in ggml order (ne[0]=dim contiguous, then sequence)
-static void cond_ggml_forward(CondGGML * m,
-                               const float * text_hidden, int S_text,
-                               const float * lyric_embed, int S_lyric,
-                               const float * timbre_feats, int S_ref,
-                               std::vector<float> & enc_hidden,
-                               int * out_enc_S) {
-    int H = 2048;
+static void cond_ggml_forward(CondGGML *           m,
+                              const float *        text_hidden,
+                              int                  S_text,
+                              const float *        lyric_embed,
+                              int                  S_lyric,
+                              const float *        timbre_feats,
+                              int                  S_ref,
+                              std::vector<float> & enc_hidden,
+                              int *                out_enc_S) {
+    int  H          = 2048;
     bool has_timbre = (timbre_feats != NULL && S_ref > 0);
 
     // Graph context (generous fixed allocation)
-    size_t ctx_size = 4096 * ggml_tensor_overhead() + ggml_graph_overhead();
-    struct ggml_init_params gp = { ctx_size, NULL, true };
-    struct ggml_context * ctx = ggml_init(gp);
-    struct ggml_cgraph * gf = ggml_new_graph_custom(ctx, 8192, false);
+    size_t                  ctx_size = 4096 * ggml_tensor_overhead() + ggml_graph_overhead();
+    struct ggml_init_params gp       = { ctx_size, NULL, true };
+    struct ggml_context *   ctx      = ggml_init(gp);
+    struct ggml_cgraph *    gf       = ggml_new_graph_custom(ctx, 8192, false);
 
     // Positions for lyric (bidirectional, 0..S_lyric-1)
     struct ggml_tensor * lyric_pos = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, S_lyric);
@@ -186,8 +189,7 @@ static void cond_ggml_forward(CondGGML * m,
     ggml_set_input(t_lyric_in);
 
     // Linear embed: [1024, S_lyric] -> [2048, S_lyric]
-    struct ggml_tensor * lyric_h = qwen3_linear_bias(ctx, m->lyric_embed_w,
-                                                      m->lyric_embed_b, t_lyric_in);
+    struct ggml_tensor * lyric_h = qwen3_linear_bias(ctx, m->lyric_embed_w, m->lyric_embed_b, t_lyric_in);
 
     // Bidirectional sliding window mask for even layers (|i-j| <= 128)
     // Python: layer_types = [sliding, full, sliding, full, ...]
@@ -199,9 +201,8 @@ static void cond_ggml_forward(CondGGML * m,
     // 8 layers with alternating masks + final norm
     for (int i = 0; i < m->lyric_cfg.n_layers; i++) {
         struct ggml_tensor * layer_mask = (i % 2 == 0) ? lyric_slide_mask : NULL;
-        lyric_h = qwen3_build_layer(ctx, m->lyric_cfg, &m->lyric_layers[i],
-                                     lyric_h, lyric_pos, layer_mask, S_lyric,
-                                     m->use_flash_attn);
+        lyric_h = qwen3_build_layer(ctx, m->lyric_cfg, &m->lyric_layers[i], lyric_h, lyric_pos, layer_mask, S_lyric,
+                                    m->use_flash_attn);
     }
     if (m->clamp_fp16) {
         lyric_h = ggml_clamp(ctx, lyric_h, -65504.0f, 65504.0f);
@@ -222,9 +223,9 @@ static void cond_ggml_forward(CondGGML * m,
     ggml_set_output(text_proj);
 
     // Path 3: Timbre encoder (optional)
-    struct ggml_tensor * timbre_out = NULL;
-    struct ggml_tensor * t_timbre_in = NULL;
-    struct ggml_tensor * timbre_pos = NULL;
+    struct ggml_tensor * timbre_out        = NULL;
+    struct ggml_tensor * t_timbre_in       = NULL;
+    struct ggml_tensor * timbre_pos        = NULL;
     struct ggml_tensor * timbre_slide_mask = NULL;
 
     if (has_timbre) {
@@ -237,8 +238,7 @@ static void cond_ggml_forward(CondGGML * m,
         ggml_set_input(t_timbre_in);
 
         // Linear embed: [64, S_ref] -> [2048, S_ref]
-        struct ggml_tensor * timbre_h = qwen3_linear_bias(ctx, m->timbre_embed_w,
-                                                           m->timbre_embed_b, t_timbre_in);
+        struct ggml_tensor * timbre_h = qwen3_linear_bias(ctx, m->timbre_embed_w, m->timbre_embed_b, t_timbre_in);
 
         // Bidirectional sliding window mask for even layers
         timbre_slide_mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, S_ref, S_ref);
@@ -248,9 +248,8 @@ static void cond_ggml_forward(CondGGML * m,
         // 4 layers with alternating masks + final norm
         for (int i = 0; i < m->timbre_cfg.n_layers; i++) {
             struct ggml_tensor * layer_mask = (i % 2 == 0) ? timbre_slide_mask : NULL;
-            timbre_h = qwen3_build_layer(ctx, m->timbre_cfg, &m->timbre_layers[i],
-                                          timbre_h, timbre_pos, layer_mask, S_ref,
-                                          m->use_flash_attn);
+            timbre_h = qwen3_build_layer(ctx, m->timbre_cfg, &m->timbre_layers[i], timbre_h, timbre_pos, layer_mask,
+                                         S_ref, m->use_flash_attn);
         }
         if (m->clamp_fp16) {
             timbre_h = ggml_clamp(ctx, timbre_h, -65504.0f, 65504.0f);
@@ -258,8 +257,7 @@ static void cond_ggml_forward(CondGGML * m,
         timbre_h = qwen3_rms_norm(ctx, timbre_h, m->timbre_norm, m->timbre_cfg.rms_norm_eps);
 
         // Take first frame: [2048, S_ref] -> view [2048, 1]
-        timbre_out = ggml_view_2d(ctx, timbre_h, H, 1,
-                                   timbre_h->nb[1], 0);
+        timbre_out = ggml_view_2d(ctx, timbre_h, H, 1, timbre_h->nb[1], 0);
         ggml_set_name(timbre_out, "timbre_out");
         ggml_set_output(timbre_out);
     }
@@ -267,7 +265,9 @@ static void cond_ggml_forward(CondGGML * m,
     // Build forward
     ggml_build_forward_expand(gf, lyric_h);
     ggml_build_forward_expand(gf, text_proj);
-    if (timbre_out) ggml_build_forward_expand(gf, timbre_out);
+    if (timbre_out) {
+        ggml_build_forward_expand(gf, timbre_out);
+    }
 
     // Allocate and set inputs
     if (!ggml_backend_sched_alloc_graph(m->sched, gf)) {
@@ -281,42 +281,50 @@ static void cond_ggml_forward(CondGGML * m,
     // Lyric positions
     {
         std::vector<int> pos(S_lyric);
-        for (int i = 0; i < S_lyric; i++) pos[i] = i;
+        for (int i = 0; i < S_lyric; i++) {
+            pos[i] = i;
+        }
         ggml_backend_tensor_set(lyric_pos, pos.data(), 0, S_lyric * sizeof(int));
     }
 
     // Lyric sliding window mask: bidirectional, |i-j| <= 128
     {
-        const int W = 128;
+        const int             W = 128;
         std::vector<uint16_t> mask_data(S_lyric * S_lyric);
         for (int i = 0; i < S_lyric; i++) {
             for (int j = 0; j < S_lyric; j++) {
-                int d = i - j; if (d < 0) d = -d;
+                int d = i - j;
+                if (d < 0) {
+                    d = -d;
+                }
                 mask_data[i * S_lyric + j] = ggml_fp32_to_fp16(d <= W ? 0.0f : -INFINITY);
             }
         }
-        ggml_backend_tensor_set(lyric_slide_mask, mask_data.data(), 0,
-                                 S_lyric * S_lyric * sizeof(uint16_t));
+        ggml_backend_tensor_set(lyric_slide_mask, mask_data.data(), 0, S_lyric * S_lyric * sizeof(uint16_t));
         fprintf(stderr, "[CondEnc] Lyric sliding mask: %dx%d, window=%d\n", S_lyric, S_lyric, W);
     }
 
     if (has_timbre) {
         ggml_backend_tensor_set(t_timbre_in, timbre_feats, 0, 64 * S_ref * sizeof(float));
         std::vector<int> pos(S_ref);
-        for (int i = 0; i < S_ref; i++) pos[i] = i;
+        for (int i = 0; i < S_ref; i++) {
+            pos[i] = i;
+        }
         ggml_backend_tensor_set(timbre_pos, pos.data(), 0, S_ref * sizeof(int));
 
         // Timbre sliding window mask: bidirectional, |i-j| <= 128
-        const int W = 128;
+        const int             W = 128;
         std::vector<uint16_t> mask_data(S_ref * S_ref);
         for (int i = 0; i < S_ref; i++) {
             for (int j = 0; j < S_ref; j++) {
-                int d = i - j; if (d < 0) d = -d;
+                int d = i - j;
+                if (d < 0) {
+                    d = -d;
+                }
                 mask_data[i * S_ref + j] = ggml_fp32_to_fp16(d <= W ? 0.0f : -INFINITY);
             }
         }
-        ggml_backend_tensor_set(timbre_slide_mask, mask_data.data(), 0,
-                                 S_ref * S_ref * sizeof(uint16_t));
+        ggml_backend_tensor_set(timbre_slide_mask, mask_data.data(), 0, S_ref * S_ref * sizeof(uint16_t));
         fprintf(stderr, "[CondEnc] Timbre sliding mask: %dx%d, window=%d\n", S_ref, S_ref, W);
     }
 
@@ -326,31 +334,28 @@ static void cond_ggml_forward(CondGGML * m,
     // Read outputs and pack on CPU
     // Pack order: lyric, timbre[0:1], text_proj
     int S_timbre_out = has_timbre ? 1 : 0;
-    int S_total = S_lyric + S_timbre_out + S_text;
+    int S_total      = S_lyric + S_timbre_out + S_text;
     enc_hidden.resize(H * S_total);
     *out_enc_S = S_total;
 
     int offset = 0;
 
     // Lyric: [2048, S_lyric]
-    ggml_backend_tensor_get(lyric_h, enc_hidden.data() + offset * H,
-                            0, H * S_lyric * sizeof(float));
+    ggml_backend_tensor_get(lyric_h, enc_hidden.data() + offset * H, 0, H * S_lyric * sizeof(float));
     offset += S_lyric;
 
     // Timbre: [2048, 1]
     if (timbre_out) {
-        ggml_backend_tensor_get(timbre_out, enc_hidden.data() + offset * H,
-                                0, H * 1 * sizeof(float));
+        ggml_backend_tensor_get(timbre_out, enc_hidden.data() + offset * H, 0, H * 1 * sizeof(float));
         offset += 1;
     }
 
     // Text projection: [2048, S_text]
-    ggml_backend_tensor_get(text_proj, enc_hidden.data() + offset * H,
-                            0, H * S_text * sizeof(float));
+    ggml_backend_tensor_get(text_proj, enc_hidden.data() + offset * H, 0, H * S_text * sizeof(float));
     offset += S_text;
 
-    fprintf(stderr, "[Encode] Packed: lyric=%d + timbre=%d + text=%d = %d tokens\n",
-            S_lyric, S_timbre_out, S_text, S_total);
+    fprintf(stderr, "[Encode] Packed: lyric=%d + timbre=%d + text=%d = %d tokens\n", S_lyric, S_timbre_out, S_text,
+            S_total);
 
     ggml_backend_sched_reset(m->sched);
     ggml_free(ctx);
@@ -358,7 +363,9 @@ static void cond_ggml_forward(CondGGML * m,
 
 // Free
 static void cond_ggml_free(CondGGML * m) {
-    if (m->sched) ggml_backend_sched_free(m->sched);
+    if (m->sched) {
+        ggml_backend_sched_free(m->sched);
+    }
     backend_release(m->backend, m->cpu_backend);
     wctx_free(&m->wctx);
     *m = {};

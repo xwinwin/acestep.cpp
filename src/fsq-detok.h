@@ -12,18 +12,18 @@
 #include "qwen3-enc.h"
 
 // FSQ constants
-static const int FSQ_NDIMS = 6;
-static const int FSQ_LEVELS[6] = {8, 8, 8, 5, 5, 5};
+static const int FSQ_NDIMS     = 6;
+static const int FSQ_LEVELS[6] = { 8, 8, 8, 5, 5, 5 };
 
 // FSQ decode: integer index -> 6 normalized float values
 // Each dimension: level_idx / ((L-1)/2) - 1.0  (maps to [-1, 1])
 static void fsq_decode_index(int index, float * out) {
     int stride = 1;
     for (int d = 0; d < FSQ_NDIMS; d++) {
-        int L = FSQ_LEVELS[d];
-        int level_idx = (index / stride) % L;
-        float half_L = (float)(L - 1) / 2.0f;
-        out[d] = (float)level_idx / half_L - 1.0f;
+        int   L         = FSQ_LEVELS[d];
+        int   level_idx = (index / stride) % L;
+        float half_L    = (float) (L - 1) / 2.0f;
+        out[d]          = (float) level_idx / half_L - 1.0f;
         stride *= L;
     }
 }
@@ -31,46 +31,45 @@ static void fsq_decode_index(int index, float * out) {
 // Detokenizer config: same Qwen3 arch as lyric/timbre encoders, 2 layers
 static Qwen3Config detok_config() {
     return {
-        /*hidden_size*/       2048,
+        /*hidden_size*/ 2048,
         /*intermediate_size*/ 6144,
-        /*n_heads*/           16,
-        /*n_kv_heads*/        8,
-        /*head_dim*/          128,
-        /*n_layers*/          2,
-        /*rope_theta*/        1000000.0f,
-        /*rms_norm_eps*/      1e-6f,
-        /*is_causal*/         false,
+        /*n_heads*/ 16,
+        /*n_kv_heads*/ 8,
+        /*head_dim*/ 128,
+        /*n_layers*/ 2,
+        /*rope_theta*/ 1000000.0f,
+        /*rms_norm_eps*/ 1e-6f,
+        /*is_causal*/ false,
     };
 }
 
 struct DetokGGML {
     // FSQ project_out: Linear(6, 2048) + bias
-    struct ggml_tensor * fsq_proj_w;    // [2048, 6]
-    struct ggml_tensor * fsq_proj_b;    // [2048]
+    struct ggml_tensor * fsq_proj_w;  // [2048, 6]
+    struct ggml_tensor * fsq_proj_b;  // [2048]
 
     // Detokenizer
-    struct ggml_tensor * embed_w;       // [2048, 2048]
-    struct ggml_tensor * embed_b;       // [2048]
-    struct ggml_tensor * special_tok;   // [2048, 5] (broadcast positional)
-    Qwen3Config cfg;
-    Qwen3Layer layers[2];
-    struct ggml_tensor * norm;          // [2048]
-    struct ggml_tensor * proj_out_w;    // [64, 2048]
-    struct ggml_tensor * proj_out_b;    // [64]
+    struct ggml_tensor * embed_w;      // [2048, 2048]
+    struct ggml_tensor * embed_b;      // [2048]
+    struct ggml_tensor * special_tok;  // [2048, 5] (broadcast positional)
+    Qwen3Config          cfg;
+    Qwen3Layer           layers[2];
+    struct ggml_tensor * norm;        // [2048]
+    struct ggml_tensor * proj_out_w;  // [64, 2048]
+    struct ggml_tensor * proj_out_b;  // [64]
 
-    ggml_backend_t backend;
-    ggml_backend_t cpu_backend;
+    ggml_backend_t       backend;
+    ggml_backend_t       cpu_backend;
     ggml_backend_sched_t sched;
-    bool use_flash_attn;
-    WeightCtx wctx;
+    bool                 use_flash_attn;
+    WeightCtx            wctx;
 };
 
 // Load from DiT GGUF
-static bool detok_ggml_load(DetokGGML * m, const char * gguf_path,
-                             ggml_backend_t backend, ggml_backend_t cpu_backend) {
-    m->cfg = detok_config();
-    m->backend = backend;
-    m->cpu_backend = cpu_backend;
+static bool detok_ggml_load(DetokGGML * m, const char * gguf_path, ggml_backend_t backend, ggml_backend_t cpu_backend) {
+    m->cfg            = detok_config();
+    m->backend        = backend;
+    m->cpu_backend    = cpu_backend;
     m->use_flash_attn = true;
 
     GGUFModel gf;
@@ -85,9 +84,9 @@ static bool detok_ggml_load(DetokGGML * m, const char * gguf_path,
     m->fsq_proj_w = gf_load_tensor(&m->wctx, gf, "tokenizer.quantizer.project_out.weight");
     m->fsq_proj_b = gf_load_tensor(&m->wctx, gf, "tokenizer.quantizer.project_out.bias");
 
-    m->embed_w = gf_load_tensor(&m->wctx, gf, "detokenizer.embed_tokens.weight");
-    m->embed_b = gf_load_tensor(&m->wctx, gf, "detokenizer.embed_tokens.bias");
-    m->norm    = gf_load_tensor(&m->wctx, gf, "detokenizer.norm.weight");
+    m->embed_w    = gf_load_tensor(&m->wctx, gf, "detokenizer.embed_tokens.weight");
+    m->embed_b    = gf_load_tensor(&m->wctx, gf, "detokenizer.embed_tokens.bias");
+    m->norm       = gf_load_tensor(&m->wctx, gf, "detokenizer.norm.weight");
     m->proj_out_w = gf_load_tensor(&m->wctx, gf, "detokenizer.proj_out.weight");
     m->proj_out_b = gf_load_tensor(&m->wctx, gf, "detokenizer.proj_out.bias");
 
@@ -108,8 +107,8 @@ static bool detok_ggml_load(DetokGGML * m, const char * gguf_path,
 
     // Scheduler
     ggml_backend_t backends[2] = { backend, cpu_backend };
-    int n = (backend == cpu_backend) ? 1 : 2;
-    m->sched = ggml_backend_sched_new(backends, NULL, n, 4096, false, true);
+    int            n           = (backend == cpu_backend) ? 1 : 2;
+    m->sched                   = ggml_backend_sched_new(backends, NULL, n, 4096, false, true);
     if (!m->sched) {
         fprintf(stderr, "[FSQ] FATAL: failed to create scheduler\n");
         return false;
@@ -123,25 +122,25 @@ static bool detok_ggml_load(DetokGGML * m, const char * gguf_path,
 // codes: [T_5Hz] integer array
 // context_out: [64 * T_25Hz] flat, caller allocates (T_25Hz = T_5Hz * 5)
 //   ggml layout [64, T_25Hz]: element (c, t) = data[t * 64 + c]
-static int detok_ggml_decode(DetokGGML * m, const int * codes, int T_5Hz,
-                              float * context_out) {
+static int detok_ggml_decode(DetokGGML * m, const int * codes, int T_5Hz, float * context_out) {
     int T_25Hz = T_5Hz * 5;
-    int H = 2048;
-    int P = 5;  // pool window: each 5Hz token -> 5 frames at 25Hz
+    int H      = 2048;
+    int P      = 5;  // pool window: each 5Hz token -> 5 frames at 25Hz
 
     // Step 1: FSQ decode all indices on CPU -> [T_5Hz, 6]
     std::vector<float> fsq_decoded(T_5Hz * FSQ_NDIMS);
-    for (int g = 0; g < T_5Hz; g++)
+    for (int g = 0; g < T_5Hz; g++) {
         fsq_decode_index(codes[g], fsq_decoded.data() + g * FSQ_NDIMS);
+    }
 
     // Step 2: build ggml graph for one token
     // input [6] -> project_out [2048] -> embed_tokens [2048]
     //   -> broadcast + special_tokens [2048, 5] -> 2L encoder -> norm -> proj_out [64, 5]
     // Graph context (generous fixed allocation)
-    size_t ctx_size = ggml_tensor_overhead() * 512 + ggml_graph_overhead_custom(4096, false);
-    std::vector<uint8_t> ctx_buf(ctx_size);
-    struct ggml_init_params p = { ctx_size, ctx_buf.data(), true };
-    struct ggml_context * ctx = ggml_init(p);
+    size_t                  ctx_size = ggml_tensor_overhead() * 512 + ggml_graph_overhead_custom(4096, false);
+    std::vector<uint8_t>    ctx_buf(ctx_size);
+    struct ggml_init_params p   = { ctx_size, ctx_buf.data(), true };
+    struct ggml_context *   ctx = ggml_init(p);
 
     // Input: one FSQ-decoded vector [6]
     // ggml pitfall: [6] is ne[0]=6, matches project_out weight [2048, 6]
@@ -151,19 +150,17 @@ static int detok_ggml_decode(DetokGGML * m, const int * codes, int T_5Hz,
 
     // project_out: [6] -> [2048]
     struct ggml_tensor * quantized = ggml_mul_mat(ctx, m->fsq_proj_w, fsq_in);
-    quantized = ggml_add(ctx, quantized, qwen3_f32(ctx, m->fsq_proj_b));
+    quantized                      = ggml_add(ctx, quantized, qwen3_f32(ctx, m->fsq_proj_b));
 
     // embed_tokens: [2048] -> [2048]
-    struct ggml_tensor * embedded = ggml_mul_mat(ctx, m->embed_w,
-                                                  ggml_reshape_2d(ctx, quantized, H, 1));
-    embedded = ggml_add(ctx, embedded, qwen3_f32(ctx, ggml_reshape_2d(ctx, m->embed_b, H, 1)));
+    struct ggml_tensor * embedded = ggml_mul_mat(ctx, m->embed_w, ggml_reshape_2d(ctx, quantized, H, 1));
+    embedded                      = ggml_add(ctx, embedded, qwen3_f32(ctx, ggml_reshape_2d(ctx, m->embed_b, H, 1)));
 
     // Broadcast [2048, 1] -> [2048, 5] + special_tokens [2048, 5]
     // ggml pitfall: special_tokens loaded as BF16, cast to F32 for add
-    struct ggml_tensor * special_2d = ggml_reshape_2d(ctx, m->special_tok, H, P);
+    struct ggml_tensor * special_2d  = ggml_reshape_2d(ctx, m->special_tok, H, P);
     struct ggml_tensor * special_f32 = qwen3_f32(ctx, special_2d);
-    struct ggml_tensor * hidden = ggml_add(ctx, ggml_repeat(ctx, embedded, special_f32),
-                                            special_f32);
+    struct ggml_tensor * hidden      = ggml_add(ctx, ggml_repeat(ctx, embedded, special_f32), special_f32);
 
     // Position indices for RoPE: [0, 1, 2, 3, 4]
     struct ggml_tensor * positions = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, P);
@@ -171,13 +168,11 @@ static int detok_ggml_decode(DetokGGML * m, const int * codes, int T_5Hz,
     ggml_set_input(positions);
 
     // 2L encoder + norm (non-causal, no mask needed at S=5)
-    hidden = qwen3_build_layers(ctx, m->cfg, m->layers, m->norm,
-                                 hidden, positions, NULL, P,
-                                 m->use_flash_attn);
+    hidden = qwen3_build_layers(ctx, m->cfg, m->layers, m->norm, hidden, positions, NULL, P, m->use_flash_attn);
 
     // proj_out: [2048, 5] -> [64, 5]
     struct ggml_tensor * output = ggml_mul_mat(ctx, m->proj_out_w, hidden);
-    output = ggml_add(ctx, output, qwen3_f32(ctx, ggml_reshape_2d(ctx, m->proj_out_b, 64, 1)));
+    output                      = ggml_add(ctx, output, qwen3_f32(ctx, ggml_reshape_2d(ctx, m->proj_out_b, 64, 1)));
     ggml_set_name(output, "detok_out");
     ggml_set_output(output);
 
@@ -191,11 +186,10 @@ static int detok_ggml_decode(DetokGGML * m, const int * codes, int T_5Hz,
     }
 
     // Set positions once (constant: 0,1,2,3,4)
-    int pos_data[5] = {0, 1, 2, 3, 4};
-    ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "detok_pos"),
-                            pos_data, 0, P * sizeof(int));
+    int pos_data[5] = { 0, 1, 2, 3, 4 };
+    ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "detok_pos"), pos_data, 0, P * sizeof(int));
 
-    struct ggml_tensor * t_in = ggml_graph_get_tensor(gf, "fsq_in");
+    struct ggml_tensor * t_in  = ggml_graph_get_tensor(gf, "fsq_in");
     struct ggml_tensor * t_out = ggml_graph_get_tensor(gf, "detok_out");
 
     // Step 3: loop over T_5Hz tokens
@@ -203,18 +197,15 @@ static int detok_ggml_decode(DetokGGML * m, const int * codes, int T_5Hz,
     for (int g = 0; g < T_5Hz; g++) {
         // Re-set positions every iteration (allocator may share buffer with intermediates)
         ggml_backend_tensor_set(t_pos, pos_data, 0, P * sizeof(int));
-        ggml_backend_tensor_set(t_in, fsq_decoded.data() + g * FSQ_NDIMS,
-                                0, FSQ_NDIMS * sizeof(float));
+        ggml_backend_tensor_set(t_in, fsq_decoded.data() + g * FSQ_NDIMS, 0, FSQ_NDIMS * sizeof(float));
         ggml_backend_sched_graph_compute(m->sched, gf);
 
         // output [64, 5]: 5 frames of 64 channels
         // context_out layout: [64, T_25Hz], frame t at offset t*64
-        ggml_backend_tensor_get(t_out, context_out + g * P * 64,
-                                0, P * 64 * sizeof(float));
+        ggml_backend_tensor_get(t_out, context_out + g * P * 64, 0, P * 64 * sizeof(float));
     }
 
-    fprintf(stderr, "[Context] Decoded: %d codes -> %d frames (%.1fs @ 25Hz)\n",
-            T_5Hz, T_25Hz, (float)T_25Hz / 25.0f);
+    fprintf(stderr, "[Context] Decoded: %d codes -> %d frames (%.1fs @ 25Hz)\n", T_5Hz, T_25Hz, (float) T_25Hz / 25.0f);
 
     ggml_backend_sched_reset(m->sched);
     ggml_free(ctx);
@@ -223,7 +214,9 @@ static int detok_ggml_decode(DetokGGML * m, const int * codes, int T_5Hz,
 
 // Free
 static void detok_ggml_free(DetokGGML * m) {
-    if (m->sched) ggml_backend_sched_free(m->sched);
+    if (m->sched) {
+        ggml_backend_sched_free(m->sched);
+    }
     wctx_free(&m->wctx);
     *m = {};
 }

@@ -13,19 +13,18 @@
 #include <cmath>
 
 // Helper: ensure tensor is f32 (cast if bf16/f16)
-static struct ggml_tensor * dit_ggml_f32(
-        struct ggml_context * ctx,
-        struct ggml_tensor * t) {
-    if (t->type == GGML_TYPE_F32) return t;
+static struct ggml_tensor * dit_ggml_f32(struct ggml_context * ctx, struct ggml_tensor * t) {
+    if (t->type == GGML_TYPE_F32) {
+        return t;
+    }
     return ggml_cast(ctx, t, GGML_TYPE_F32);
 }
 
 // Helper: RMSNorm + weight multiply
-static struct ggml_tensor * dit_ggml_rms_norm_weighted(
-        struct ggml_context * ctx,
-        struct ggml_tensor * x,         // [H, S]
-        struct ggml_tensor * weight,    // [H]
-        float eps) {
+static struct ggml_tensor * dit_ggml_rms_norm_weighted(struct ggml_context * ctx,
+                                                       struct ggml_tensor *  x,       // [H, S]
+                                                       struct ggml_tensor *  weight,  // [H]
+                                                       float                 eps) {
     struct ggml_tensor * norm = ggml_rms_norm(ctx, x, eps);
     return ggml_mul(ctx, norm, dit_ggml_f32(ctx, weight));
 }
@@ -34,19 +33,17 @@ static struct ggml_tensor * dit_ggml_rms_norm_weighted(
 // weight: [in, out] in ggml (= [out, in] in PyTorch)
 // input:  [in, S]
 // output: [out, S]
-static struct ggml_tensor * dit_ggml_linear(
-        struct ggml_context * ctx,
-        struct ggml_tensor * weight,
-        struct ggml_tensor * input) {
+static struct ggml_tensor * dit_ggml_linear(struct ggml_context * ctx,
+                                            struct ggml_tensor *  weight,
+                                            struct ggml_tensor *  input) {
     return ggml_mul_mat(ctx, weight, input);
 }
 
 // Helper: Linear layer with bias
-static struct ggml_tensor * dit_ggml_linear_bias(
-        struct ggml_context * ctx,
-        struct ggml_tensor * weight,
-        struct ggml_tensor * bias,
-        struct ggml_tensor * input) {
+static struct ggml_tensor * dit_ggml_linear_bias(struct ggml_context * ctx,
+                                                 struct ggml_tensor *  weight,
+                                                 struct ggml_tensor *  bias,
+                                                 struct ggml_tensor *  input) {
     struct ggml_tensor * out = ggml_mul_mat(ctx, weight, input);
     return ggml_add(ctx, out, dit_ggml_f32(ctx, bias));
 }
@@ -54,42 +51,38 @@ static struct ggml_tensor * dit_ggml_linear_bias(
 // Helper: AdaLN modulate
 // out = norm * (1 + scale) + shift
 // norm: [H, S], scale: [H], shift: [H]
-static struct ggml_tensor * dit_ggml_adaln(
-        struct ggml_context * ctx,
-        struct ggml_tensor * norm,
-        struct ggml_tensor * scale,
-        struct ggml_tensor * shift,
-        struct ggml_tensor * one) {
+static struct ggml_tensor * dit_ggml_adaln(struct ggml_context * ctx,
+                                           struct ggml_tensor *  norm,
+                                           struct ggml_tensor *  scale,
+                                           struct ggml_tensor *  shift,
+                                           struct ggml_tensor *  one) {
     // norm * (1 + scale) + shift
     // one is [1] = 1.0, broadcasts to [H]; avoids expensive [H,S,N] add
-    struct ggml_tensor * one_plus_s = ggml_add(ctx, scale, one);   // [H] + [1] -> [H]
-    struct ggml_tensor * scaled = ggml_mul(ctx, norm, one_plus_s); // [H,S,N]
-    return ggml_add(ctx, scaled, shift);                           // [H,S,N]
+    struct ggml_tensor * one_plus_s = ggml_add(ctx, scale, one);        // [H] + [1] -> [H]
+    struct ggml_tensor * scaled     = ggml_mul(ctx, norm, one_plus_s);  // [H,S,N]
+    return ggml_add(ctx, scaled, shift);                                // [H,S,N]
 }
 
 // Helper: Gated residual
 // out = residual + x * gate
 // residual: [H, S], x: [H, S], gate: [H]
 // NOTE: no sigmoid, gate is a raw scaling factor (matches Python reference)
-static struct ggml_tensor * dit_ggml_gated_add(
-        struct ggml_context * ctx,
-        struct ggml_tensor * residual,
-        struct ggml_tensor * x,
-        struct ggml_tensor * gate) {
-    struct ggml_tensor * gated = ggml_mul(ctx, x, gate); // broadcast [H] over [H,S]
+static struct ggml_tensor * dit_ggml_gated_add(struct ggml_context * ctx,
+                                               struct ggml_tensor *  residual,
+                                               struct ggml_tensor *  x,
+                                               struct ggml_tensor *  gate) {
+    struct ggml_tensor * gated = ggml_mul(ctx, x, gate);  // broadcast [H] over [H,S]
     return ggml_add(ctx, residual, gated);
 }
 
 // Build timestep embedding subgraph
 // t_scalar: [1] f32, returns temb [H] and *out_tproj [6H]
 // suffix: "_t" or "_r" for naming intermediate tensors
-static struct ggml_tensor * dit_ggml_build_temb(
-        struct ggml_context * ctx,
-        DiTGGMLTembWeights * w,
-        struct ggml_tensor * t_scalar,
-        struct ggml_tensor ** out_tproj,
-        const char * suffix = "") {
-
+static struct ggml_tensor * dit_ggml_build_temb(struct ggml_context * ctx,
+                                                DiTGGMLTembWeights *  w,
+                                                struct ggml_tensor *  t_scalar,
+                                                struct ggml_tensor ** out_tproj,
+                                                const char *          suffix = "") {
     // scale timestep by 1000 (diffusion convention, matches Python)
     struct ggml_tensor * t_scaled = ggml_scale(ctx, t_scalar, 1000.0f);
 
@@ -110,6 +103,7 @@ static struct ggml_tensor * dit_ggml_build_temb(
         ggml_set_name(h, name);
         ggml_set_output(h);
     }
+
     h = ggml_silu(ctx, h);
 
     // linear2: [H] -> [H]
@@ -117,7 +111,7 @@ static struct ggml_tensor * dit_ggml_build_temb(
 
     // silu + proj: [H] -> [6H]
     struct ggml_tensor * h2 = ggml_silu(ctx, temb);
-    *out_tproj = dit_ggml_linear_bias(ctx, w->time_proj_w, w->time_proj_b, h2);
+    *out_tproj              = dit_ggml_linear_bias(ctx, w->time_proj_w, w->time_proj_b, h2);
 
     return temb;  // [H] (used for output adaln)
 }
@@ -126,17 +120,16 @@ static struct ggml_tensor * dit_ggml_build_temb(
 // Q: [D, S, Nh], K: [D, S_kv, Nkv], V: [D, S_kv, Nkv]
 // mask: [S_kv, S] F16 or NULL, scale: 1/sqrt(D)
 // Returns: [D, Nh, S] (same layout as flash_attn_ext output)
-static struct ggml_tensor * dit_attn_f32(
-        struct ggml_context * ctx,
-        struct ggml_tensor * q,
-        struct ggml_tensor * k,
-        struct ggml_tensor * v,
-        struct ggml_tensor * mask,
-        float scale) {
+static struct ggml_tensor * dit_attn_f32(struct ggml_context * ctx,
+                                         struct ggml_tensor *  q,
+                                         struct ggml_tensor *  k,
+                                         struct ggml_tensor *  v,
+                                         struct ggml_tensor *  mask,
+                                         float                 scale) {
     struct ggml_tensor * scores = ggml_mul_mat(ctx, k, q);
-    scores = ggml_soft_max_ext(ctx, scores, mask, scale, 0.0f);
-    struct ggml_tensor * vt = ggml_cont(ctx, ggml_transpose(ctx, v));
-    struct ggml_tensor * out = ggml_mul_mat(ctx, vt, scores);
+    scores                      = ggml_soft_max_ext(ctx, scores, mask, scale, 0.0f);
+    struct ggml_tensor * vt     = ggml_cont(ctx, ggml_transpose(ctx, v));
+    struct ggml_tensor * out    = ggml_mul_mat(ctx, vt, scores);
     return ggml_cont(ctx, ggml_permute(ctx, out, 0, 2, 1, 3));
 }
 
@@ -144,32 +137,34 @@ static struct ggml_tensor * dit_attn_f32(
 // norm_sa: [H, S, N] pre-normalized + AdaLN-modulated hidden state
 // Returns: output [H, S, N] (self-attention output, NOT added to residual yet)
 static struct ggml_tensor * dit_ggml_build_self_attn(
-        struct ggml_context * ctx,
-        DiTGGML * m,
-        DiTGGMLLayer * ly,
-        struct ggml_tensor * norm_sa,   // [H, S, N] pre-normalized + AdaLN-modulated
-        struct ggml_tensor * positions, // [S*N] int32 position indices for RoPE
-        struct ggml_tensor * mask,      // [S, S] or NULL (sliding window mask)
-        int S, int N, int layer_idx = -1) {
-
-    DiTGGMLConfig & c = m->cfg;
-    int D  = c.head_dim;
-    int Nh = c.n_heads;
-    int Nkv = c.n_kv_heads;
+    struct ggml_context * ctx,
+    DiTGGML *             m,
+    DiTGGMLLayer *        ly,
+    struct ggml_tensor *  norm_sa,    // [H, S, N] pre-normalized + AdaLN-modulated
+    struct ggml_tensor *  positions,  // [S*N] int32 position indices for RoPE
+    struct ggml_tensor *  mask,       // [S, S] or NULL (sliding window mask)
+    int                   S,
+    int                   N,
+    int                   layer_idx = -1) {
+    DiTGGMLConfig & c   = m->cfg;
+    int             D   = c.head_dim;
+    int             Nh  = c.n_heads;
+    int             Nkv = c.n_kv_heads;
 
     // 1) QKV projections (full fused, QK partial, separate)
-    struct ggml_tensor * q, * k, * v;
-    int q_dim  = Nh * D;
-    int kv_dim = Nkv * D;
+    struct ggml_tensor *q, *k, *v;
+    int                 q_dim  = Nh * D;
+    int                 kv_dim = Nkv * D;
     if (ly->sa_qkv) {
         struct ggml_tensor * qkv = dit_ggml_linear(ctx, ly->sa_qkv, norm_sa);
-        q = ggml_cont(ctx, ggml_view_3d(ctx, qkv, q_dim, S, N, qkv->nb[1], qkv->nb[2], 0));
-        k = ggml_cont(ctx, ggml_view_3d(ctx, qkv, kv_dim, S, N, qkv->nb[1], qkv->nb[2], (size_t)q_dim * qkv->nb[0]));
-        v = ggml_cont(ctx, ggml_view_3d(ctx, qkv, kv_dim, S, N, qkv->nb[1], qkv->nb[2], (size_t)(q_dim + kv_dim) * qkv->nb[0]));
+        q                        = ggml_cont(ctx, ggml_view_3d(ctx, qkv, q_dim, S, N, qkv->nb[1], qkv->nb[2], 0));
+        k = ggml_cont(ctx, ggml_view_3d(ctx, qkv, kv_dim, S, N, qkv->nb[1], qkv->nb[2], (size_t) q_dim * qkv->nb[0]));
+        v = ggml_cont(
+            ctx, ggml_view_3d(ctx, qkv, kv_dim, S, N, qkv->nb[1], qkv->nb[2], (size_t) (q_dim + kv_dim) * qkv->nb[0]));
     } else if (ly->sa_qk) {
         struct ggml_tensor * qk = dit_ggml_linear(ctx, ly->sa_qk, norm_sa);
-        q = ggml_cont(ctx, ggml_view_3d(ctx, qk, q_dim, S, N, qk->nb[1], qk->nb[2], 0));
-        k = ggml_cont(ctx, ggml_view_3d(ctx, qk, kv_dim, S, N, qk->nb[1], qk->nb[2], (size_t)q_dim * qk->nb[0]));
+        q                       = ggml_cont(ctx, ggml_view_3d(ctx, qk, q_dim, S, N, qk->nb[1], qk->nb[2], 0));
+        k = ggml_cont(ctx, ggml_view_3d(ctx, qk, kv_dim, S, N, qk->nb[1], qk->nb[2], (size_t) q_dim * qk->nb[0]));
         v = dit_ggml_linear(ctx, ly->sa_v_proj, norm_sa);
     } else {
         q = dit_ggml_linear(ctx, ly->sa_q_proj, norm_sa);
@@ -196,14 +191,9 @@ static struct ggml_tensor * dit_ggml_build_self_attn(
     //    Merge S and N before rope, then restore 4D after.
     q = ggml_reshape_3d(ctx, q, D, Nh, S * N);
     k = ggml_reshape_3d(ctx, k, D, Nkv, S * N);
-    q = ggml_rope_ext(ctx, q, positions, NULL,
-                       D, 2 /*mode=NEOX*/, 0 /*n_ctx_orig*/,
-                       c.rope_theta, 1.0f /*freq_scale*/,
-                       0.0f, 1.0f, 0.0f, 0.0f);
-    k = ggml_rope_ext(ctx, k, positions, NULL,
-                       D, 2, 0,
-                       c.rope_theta, 1.0f,
-                       0.0f, 1.0f, 0.0f, 0.0f);
+    q = ggml_rope_ext(ctx, q, positions, NULL, D, 2 /*mode=NEOX*/, 0 /*n_ctx_orig*/, c.rope_theta, 1.0f /*freq_scale*/,
+                      0.0f, 1.0f, 0.0f, 0.0f);
+    k = ggml_rope_ext(ctx, k, positions, NULL, D, 2, 0, c.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
     q = ggml_reshape_4d(ctx, q, D, Nh, S, N);
     k = ggml_reshape_4d(ctx, k, D, Nkv, S, N);
 
@@ -221,10 +211,9 @@ static struct ggml_tensor * dit_ggml_build_self_attn(
 
     // 7) Attention (flash on GPU, F32 manual on CPU)
     //    Q[D, S, Nh, N], K[D, S, Nkv, N], V[D, S, Nkv, N]
-    float scale = 1.0f / sqrtf((float)D);
-    struct ggml_tensor * attn = m->use_flash_attn
-        ? ggml_flash_attn_ext(ctx, q, k, v, mask, scale, 0.0f, 0.0f)
-        : dit_attn_f32(ctx, q, k, v, mask, scale);
+    float                scale = 1.0f / sqrtf((float) D);
+    struct ggml_tensor * attn  = m->use_flash_attn ? ggml_flash_attn_ext(ctx, q, k, v, mask, scale, 0.0f, 0.0f) :
+                                                     dit_attn_f32(ctx, q, k, v, mask, scale);
 
     // Both return [D, Nh, S, N]
     // Reshape: [D, Nh, S, N] -> [D*Nh, S, N] = [H, S, N]
@@ -243,23 +232,21 @@ static struct ggml_tensor * dit_ggml_build_self_attn(
 // Build MLP sub-graph: SwiGLU
 // norm_ffn: [H, S, N] pre-normalized + AdaLN-modulated hidden state
 // Returns: output [H, S, N]
-static struct ggml_tensor * dit_ggml_build_mlp(
-        struct ggml_context * ctx,
-        DiTGGML * m,
-        DiTGGMLLayer * ly,
-        struct ggml_tensor * norm_ffn,
-        int S) {
-
+static struct ggml_tensor * dit_ggml_build_mlp(struct ggml_context * ctx,
+                                               DiTGGML *             m,
+                                               DiTGGMLLayer *        ly,
+                                               struct ggml_tensor *  norm_ffn,
+                                               int                   S) {
     struct ggml_tensor * ff;
     if (ly->gate_up) {
         // Fused: single matmul [H, 2*I] x [H, S, N] -> [2*I, S, N], then swiglu splits ne[0]
         struct ggml_tensor * gu = dit_ggml_linear(ctx, ly->gate_up, norm_ffn);
-        ff = ggml_swiglu(ctx, gu);
+        ff                      = ggml_swiglu(ctx, gu);
     } else {
         // Separate: two matmuls + split swiglu
         struct ggml_tensor * gate = dit_ggml_linear(ctx, ly->gate_proj, norm_ffn);
         struct ggml_tensor * up   = dit_ggml_linear(ctx, ly->up_proj, norm_ffn);
-        ff = ggml_swiglu_split(ctx, gate, up);
+        ff                        = ggml_swiglu_split(ctx, gate, up);
     }
 
     // Down projection: [I, S] -> [H, S]
@@ -270,42 +257,41 @@ static struct ggml_tensor * dit_ggml_build_mlp(
 // norm_ca: [H, S, N] pre-normalized hidden state (Q source)
 // enc:     [H, enc_S, N] condition-embedded encoder states (K/V source)
 // Returns: output [H, S, N] (NOT added to residual yet)
-static struct ggml_tensor * dit_ggml_build_cross_attn(
-        struct ggml_context * ctx,
-        DiTGGML * m,
-        DiTGGMLLayer * ly,
-        struct ggml_tensor * norm_ca,   // [H, S, N]
-        struct ggml_tensor * enc,       // [H, enc_S, N]
-        struct ggml_tensor * positions, // unused, kept for consistency
-        int S, int enc_S, int N) {
+static struct ggml_tensor * dit_ggml_build_cross_attn(struct ggml_context * ctx,
+                                                      DiTGGML *             m,
+                                                      DiTGGMLLayer *        ly,
+                                                      struct ggml_tensor *  norm_ca,    // [H, S, N]
+                                                      struct ggml_tensor *  enc,        // [H, enc_S, N]
+                                                      struct ggml_tensor *  positions,  // unused, kept for consistency
+                                                      int                   S,
+                                                      int                   enc_S,
+                                                      int                   N) {
+    DiTGGMLConfig & c   = m->cfg;
+    int             D   = c.head_dim;
+    int             Nh  = c.n_heads;
+    int             Nkv = c.n_kv_heads;
 
-    DiTGGMLConfig & c = m->cfg;
-    int D   = c.head_dim;
-    int Nh  = c.n_heads;
-    int Nkv = c.n_kv_heads;
-
-    (void)positions;  // cross-attn has no RoPE
+    (void) positions;  // cross-attn has no RoPE
 
     // Q from hidden, KV from encoder (full fused, Q+KV partial, separate)
-    int q_dim  = Nh * D;
-    int kv_dim = Nkv * D;
-    struct ggml_tensor * q, * k, * v;
+    int                 q_dim  = Nh * D;
+    int                 kv_dim = Nkv * D;
+    struct ggml_tensor *q, *k, *v;
     if (ly->ca_qkv) {
         // Full QKV fused: split Q from hidden, KV from enc via weight views
-        struct ggml_tensor * w_q  = ggml_view_2d(ctx, ly->ca_qkv, ly->ca_qkv->ne[0], q_dim,
-                                                  ly->ca_qkv->nb[1], 0);
-        struct ggml_tensor * w_kv = ggml_view_2d(ctx, ly->ca_qkv, ly->ca_qkv->ne[0], 2 * kv_dim,
-                                                  ly->ca_qkv->nb[1], (size_t)q_dim * ly->ca_qkv->nb[1]);
-        q = ggml_mul_mat(ctx, w_q, norm_ca);
-        struct ggml_tensor * kv = ggml_mul_mat(ctx, w_kv, enc);
-        k = ggml_cont(ctx, ggml_view_3d(ctx, kv, kv_dim, enc_S, N, kv->nb[1], kv->nb[2], 0));
-        v = ggml_cont(ctx, ggml_view_3d(ctx, kv, kv_dim, enc_S, N, kv->nb[1], kv->nb[2], (size_t)kv_dim * kv->nb[0]));
+        struct ggml_tensor * w_q  = ggml_view_2d(ctx, ly->ca_qkv, ly->ca_qkv->ne[0], q_dim, ly->ca_qkv->nb[1], 0);
+        struct ggml_tensor * w_kv = ggml_view_2d(ctx, ly->ca_qkv, ly->ca_qkv->ne[0], 2 * kv_dim, ly->ca_qkv->nb[1],
+                                                 (size_t) q_dim * ly->ca_qkv->nb[1]);
+        q                         = ggml_mul_mat(ctx, w_q, norm_ca);
+        struct ggml_tensor * kv   = ggml_mul_mat(ctx, w_kv, enc);
+        k                         = ggml_cont(ctx, ggml_view_3d(ctx, kv, kv_dim, enc_S, N, kv->nb[1], kv->nb[2], 0));
+        v = ggml_cont(ctx, ggml_view_3d(ctx, kv, kv_dim, enc_S, N, kv->nb[1], kv->nb[2], (size_t) kv_dim * kv->nb[0]));
     } else if (ly->ca_kv) {
         // Q separate, K+V fused
-        q = dit_ggml_linear(ctx, ly->ca_q_proj, norm_ca);
+        q                       = dit_ggml_linear(ctx, ly->ca_q_proj, norm_ca);
         struct ggml_tensor * kv = ggml_mul_mat(ctx, ly->ca_kv, enc);
-        k = ggml_cont(ctx, ggml_view_3d(ctx, kv, kv_dim, enc_S, N, kv->nb[1], kv->nb[2], 0));
-        v = ggml_cont(ctx, ggml_view_3d(ctx, kv, kv_dim, enc_S, N, kv->nb[1], kv->nb[2], (size_t)kv_dim * kv->nb[0]));
+        k                       = ggml_cont(ctx, ggml_view_3d(ctx, kv, kv_dim, enc_S, N, kv->nb[1], kv->nb[2], 0));
+        v = ggml_cont(ctx, ggml_view_3d(ctx, kv, kv_dim, enc_S, N, kv->nb[1], kv->nb[2], (size_t) kv_dim * kv->nb[0]));
     } else {
         q = dit_ggml_linear(ctx, ly->ca_q_proj, norm_ca);
         k = dit_ggml_linear(ctx, ly->ca_k_proj, enc);
@@ -314,13 +300,13 @@ static struct ggml_tensor * dit_ggml_build_cross_attn(
 
     // reshape to [D, heads, seq, N] then permute to [D, seq, heads, N]
     q = ggml_reshape_4d(ctx, q, D, Nh, S, N);
-    q = ggml_permute(ctx, q, 0, 2, 1, 3);   // [D, S, Nh, N]
+    q = ggml_permute(ctx, q, 0, 2, 1, 3);  // [D, S, Nh, N]
 
     k = ggml_reshape_4d(ctx, k, D, Nkv, enc_S, N);
-    k = ggml_permute(ctx, k, 0, 2, 1, 3);   // [D, enc_S, Nkv, N]
+    k = ggml_permute(ctx, k, 0, 2, 1, 3);  // [D, enc_S, Nkv, N]
 
     v = ggml_reshape_4d(ctx, v, D, Nkv, enc_S, N);
-    v = ggml_permute(ctx, v, 0, 2, 1, 3);   // [D, enc_S, Nkv, N]
+    v = ggml_permute(ctx, v, 0, 2, 1, 3);  // [D, enc_S, Nkv, N]
 
     // QK-norm (per head)
     q = ggml_rms_norm(ctx, q, c.rms_norm_eps);
@@ -330,10 +316,9 @@ static struct ggml_tensor * dit_ggml_build_cross_attn(
 
     // no RoPE for cross-attention
     // no mask (attend to all encoder positions)
-    float scale = 1.0f / sqrtf((float)D);
-    struct ggml_tensor * attn = m->use_flash_attn
-        ? ggml_flash_attn_ext(ctx, q, k, v, NULL, scale, 0.0f, 0.0f)
-        : dit_attn_f32(ctx, q, k, v, NULL, scale);
+    float                scale = 1.0f / sqrtf((float) D);
+    struct ggml_tensor * attn  = m->use_flash_attn ? ggml_flash_attn_ext(ctx, q, k, v, NULL, scale, 0.0f, 0.0f) :
+                                                     dit_attn_f32(ctx, q, k, v, NULL, scale);
 
     // Attention output: [D, Nh, S, N], reshape to [H, S, N]
     attn = ggml_reshape_3d(ctx, attn, Nh * D, S, N);
@@ -347,20 +332,20 @@ static struct ggml_tensor * dit_ggml_build_cross_attn(
 // enc: [H, enc_S, N] (condition-embedded encoder states, or NULL to skip cross-attn)
 // sw_mask: [S, S] sliding window mask (or NULL for full attention)
 // Returns: updated hidden [H, S, N]
-static struct ggml_tensor * dit_ggml_build_layer(
-        struct ggml_context * ctx,
-        DiTGGML * m,
-        int layer_idx,
-        struct ggml_tensor * hidden,    // [H, S, N]
-        struct ggml_tensor * tproj,     // [6H] f32 combined temb projection
-        struct ggml_tensor * enc,       // [H, enc_S, N] or NULL
-        struct ggml_tensor * positions, // [S] int32
-        struct ggml_tensor * sw_mask,   // [S, S] or NULL
-        int S, int enc_S, int N) {
-
-    DiTGGMLConfig & c = m->cfg;
-    DiTGGMLLayer * ly = &m->layers[layer_idx];
-    int H = c.hidden_size;
+static struct ggml_tensor * dit_ggml_build_layer(struct ggml_context * ctx,
+                                                 DiTGGML *             m,
+                                                 int                   layer_idx,
+                                                 struct ggml_tensor *  hidden,     // [H, S, N]
+                                                 struct ggml_tensor *  tproj,      // [6H] f32 combined temb projection
+                                                 struct ggml_tensor *  enc,        // [H, enc_S, N] or NULL
+                                                 struct ggml_tensor *  positions,  // [S] int32
+                                                 struct ggml_tensor *  sw_mask,    // [S, S] or NULL
+                                                 int                   S,
+                                                 int                   enc_S,
+                                                 int                   N) {
+    DiTGGMLConfig & c  = m->cfg;
+    DiTGGMLLayer *  ly = &m->layers[layer_idx];
+    int             H  = c.hidden_size;
 
     // AdaLN: scale_shift_table [6, H] + tproj [6H] -> 6 vectors of [H]
     // scale_shift_table is stored as bf16, cast to f32 for arithmetic
@@ -370,10 +355,10 @@ static struct ggml_tensor * dit_ggml_build_layer(
     }
     // flatten [H, 6] -> [6H] (ggml ne[0]=H, ne[1]=6, contiguous = 6H floats)
     struct ggml_tensor * ss_flat = ggml_reshape_1d(ctx, ss, 6 * H);
-    struct ggml_tensor * adaln = ggml_add(ctx, ss_flat, tproj);  // [6H] f32
+    struct ggml_tensor * adaln   = ggml_add(ctx, ss_flat, tproj);  // [6H] f32
 
     // extract 6 modulation vectors [H] each
-    size_t Hb = H * sizeof(float);
+    size_t               Hb        = H * sizeof(float);
     struct ggml_tensor * shift_sa  = ggml_view_1d(ctx, adaln, H, 0 * Hb);
     struct ggml_tensor * scale_sa  = ggml_view_1d(ctx, adaln, H, 1 * Hb);
     struct ggml_tensor * gate_sa   = ggml_view_1d(ctx, adaln, H, 2 * Hb);
@@ -383,8 +368,8 @@ static struct ggml_tensor * dit_ggml_build_layer(
 
     // Self-attention with AdaLN + gated residual
     struct ggml_tensor * residual = hidden;
-    struct ggml_tensor * norm_sa = dit_ggml_rms_norm_weighted(ctx, hidden, ly->self_attn_norm, c.rms_norm_eps);
-    norm_sa = dit_ggml_adaln(ctx, norm_sa, scale_sa, shift_sa, m->scalar_one);
+    struct ggml_tensor * norm_sa  = dit_ggml_rms_norm_weighted(ctx, hidden, ly->self_attn_norm, c.rms_norm_eps);
+    norm_sa                       = dit_ggml_adaln(ctx, norm_sa, scale_sa, shift_sa, m->scalar_one);
 
     if (layer_idx == 0) {
         ggml_set_name(norm_sa, "layer0_sa_input");
@@ -392,7 +377,7 @@ static struct ggml_tensor * dit_ggml_build_layer(
     }
 
     // select mask: even layers use sliding window, odd layers use full attention
-    struct ggml_tensor * mask = (ly->layer_type == 0) ? sw_mask : NULL;
+    struct ggml_tensor * mask   = (ly->layer_type == 0) ? sw_mask : NULL;
     struct ggml_tensor * sa_out = dit_ggml_build_self_attn(ctx, m, ly, norm_sa, positions, mask, S, N, layer_idx);
 
     if (layer_idx == 0) {
@@ -410,8 +395,8 @@ static struct ggml_tensor * dit_ggml_build_layer(
     // Cross-attention (no gate, simple residual add)
     if (enc) {
         struct ggml_tensor * norm_ca = dit_ggml_rms_norm_weighted(ctx, hidden, ly->cross_attn_norm, c.rms_norm_eps);
-        struct ggml_tensor * ca_out = dit_ggml_build_cross_attn(ctx, m, ly, norm_ca, enc, positions, S, enc_S, N);
-        hidden = ggml_add(ctx, hidden, ca_out);
+        struct ggml_tensor * ca_out  = dit_ggml_build_cross_attn(ctx, m, ly, norm_ca, enc, positions, S, enc_S, N);
+        hidden                       = ggml_add(ctx, hidden, ca_out);
     }
 
     if (layer_idx == 0) {
@@ -420,11 +405,11 @@ static struct ggml_tensor * dit_ggml_build_layer(
     }
 
     // FFN with AdaLN + gated residual
-    residual = hidden;
+    residual                      = hidden;
     struct ggml_tensor * norm_ffn = dit_ggml_rms_norm_weighted(ctx, hidden, ly->mlp_norm, c.rms_norm_eps);
-    norm_ffn = dit_ggml_adaln(ctx, norm_ffn, scale_ffn, shift_ffn, m->scalar_one);
-    struct ggml_tensor * ffn_out = dit_ggml_build_mlp(ctx, m, ly, norm_ffn, S);
-    hidden = dit_ggml_gated_add(ctx, residual, ffn_out, gate_ffn);
+    norm_ffn                      = dit_ggml_adaln(ctx, norm_ffn, scale_ffn, shift_ffn, m->scalar_one);
+    struct ggml_tensor * ffn_out  = dit_ggml_build_mlp(ctx, m, ly, norm_ffn, S);
+    hidden                        = dit_ggml_gated_add(ctx, residual, ffn_out, gate_ffn);
 
     return hidden;
 }
@@ -443,19 +428,18 @@ static struct ggml_tensor * dit_ggml_build_layer(
 //
 // Graph outputs:
 //   "velocity"        [out_channels, T, N]  predicted flow velocity
-static struct ggml_cgraph * dit_ggml_build_graph(
-        DiTGGML * m,
-        struct ggml_context * ctx,
-        int T,                 // temporal length (before patching)
-        int enc_S,             // encoder sequence length
-        int N,                 // batch size
-        struct ggml_tensor ** p_input,     // [out] input tensor to fill
-        struct ggml_tensor ** p_output) {  // [out] output tensor to read
+static struct ggml_cgraph * dit_ggml_build_graph(DiTGGML *             m,
+                                                 struct ggml_context * ctx,
+                                                 int                   T,           // temporal length (before patching)
+                                                 int                   enc_S,       // encoder sequence length
+                                                 int                   N,           // batch size
+                                                 struct ggml_tensor ** p_input,     // [out] input tensor to fill
+                                                 struct ggml_tensor ** p_output) {  // [out] output tensor to read
 
     DiTGGMLConfig & c = m->cfg;
-    int S = T / c.patch_size;  // sequence length after patching
-    int H = c.hidden_size;
-    int P = c.patch_size;
+    int             S = T / c.patch_size;  // sequence length after patching
+    int             H = c.hidden_size;
+    int             P = c.patch_size;
 
     struct ggml_cgraph * gf = ggml_new_graph_custom(ctx, 8192, false);
 
@@ -502,6 +486,7 @@ static struct ggml_cgraph * dit_ggml_build_graph(
 
     // 1) Timestep embeddings
     struct ggml_tensor * tproj;
+
     struct ggml_tensor * temb;
 
     {
@@ -519,7 +504,7 @@ static struct ggml_cgraph * dit_ggml_build_graph(
         ggml_set_output(temb_r);
 
         // combine: temb = temb_t + temb_r [H], tproj = tproj_t + tproj_r [6H]
-        temb  = ggml_add(ctx, temb_t, temb_r);
+        temb = ggml_add(ctx, temb_t, temb_r);
         ggml_set_name(temb, "temb");
         ggml_set_output(temb);
         tproj = ggml_add(ctx, tproj_t, tproj_r);
@@ -531,7 +516,7 @@ static struct ggml_cgraph * dit_ggml_build_graph(
     ggml_set_name(input, "proj_in_input");
     ggml_set_output(input);
     struct ggml_tensor * patched = ggml_reshape_3d(ctx, input, c.in_channels * P, S, N);
-    struct ggml_tensor * hidden = dit_ggml_linear_bias(ctx, m->proj_in_w, m->proj_in_b, patched);
+    struct ggml_tensor * hidden  = dit_ggml_linear_bias(ctx, m->proj_in_w, m->proj_in_b, patched);
     ggml_set_name(hidden, "hidden_after_proj_in");
     ggml_set_output(hidden);
 
@@ -560,18 +545,18 @@ static struct ggml_cgraph * dit_ggml_build_graph(
     }
     struct ggml_tensor * oss_flat = ggml_reshape_1d(ctx, oss, 2 * H);
 
-    size_t Hb = H * sizeof(float);
+    size_t               Hb        = H * sizeof(float);
     struct ggml_tensor * out_shift = ggml_view_1d(ctx, oss_flat, H, 0);
     struct ggml_tensor * out_scale = ggml_view_1d(ctx, oss_flat, H, Hb);
-    out_shift = ggml_add(ctx, out_shift, temb);
-    out_scale = ggml_add(ctx, out_scale, temb);
+    out_shift                      = ggml_add(ctx, out_shift, temb);
+    out_scale                      = ggml_add(ctx, out_scale, temb);
 
     struct ggml_tensor * norm_out = dit_ggml_rms_norm_weighted(ctx, hidden, m->norm_out, c.rms_norm_eps);
-    norm_out = dit_ggml_adaln(ctx, norm_out, out_scale, out_shift, m->scalar_one);
+    norm_out                      = dit_ggml_adaln(ctx, norm_out, out_scale, out_shift, m->scalar_one);
 
     // proj_out: weight pre-permuted+transposed at load time to [H, out_ch*P] F32
     struct ggml_tensor * output = dit_ggml_linear_bias(ctx, m->proj_out_w, m->proj_out_b, norm_out);
-    output = ggml_reshape_3d(ctx, output, c.out_channels, T, N);
+    output                      = ggml_reshape_3d(ctx, output, c.out_channels, T, N);
 
     ggml_set_name(output, "velocity");
     ggml_set_output(output);

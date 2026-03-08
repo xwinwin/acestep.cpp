@@ -20,7 +20,7 @@ extern "C" int cudaDeviceGetAttribute(int *, int, int);
 struct BackendPair {
     ggml_backend_t backend;
     ggml_backend_t cpu_backend;
-    int gpu_cc; // CUDA compute capability (e.g. 720 for sm_72), 0 if not CUDA
+    int            gpu_cc;  // CUDA compute capability (e.g. 720 for sm_72), 0 if not CUDA
 };
 
 // Cached backend state (shared across all modules in the same binary)
@@ -34,20 +34,21 @@ static int         g_backend_refs  = 0;
 static BackendPair backend_init(const char * label) {
     if (g_backend_refs > 0) {
         g_backend_refs++;
-        fprintf(stderr, "[Load] %s backend: %s (shared)\n",
-                label, ggml_backend_name(g_backend_cache.backend));
+        fprintf(stderr, "[Load] %s backend: %s (shared)\n", label, ggml_backend_name(g_backend_cache.backend));
         return g_backend_cache;
     }
 
     ggml_backend_load_all();
     BackendPair bp = {};
-    bp.backend = ggml_backend_init_best();
+    bp.backend     = ggml_backend_init_best();
     if (!bp.backend) {
         fprintf(stderr, "[Load] FATAL: no backend available\n");
         exit(1);
     }
-    int n_threads = (int)std::thread::hardware_concurrency() / 2;
-    if (n_threads < 1) n_threads = 1;
+    int n_threads = (int) std::thread::hardware_concurrency() / 2;
+    if (n_threads < 1) {
+        n_threads = 1;
+    }
     // [GGML] If best backend is already CPU, reuse it (avoid 2 CPU instances
     // where only one gets the thread count)
     bool best_is_cpu = (strcmp(ggml_backend_name(bp.backend), "CPU") == 0);
@@ -62,31 +63,36 @@ static BackendPair backend_init(const char * label) {
         }
         ggml_backend_cpu_set_n_threads(bp.cpu_backend, n_threads);
     }
-    fprintf(stderr, "[Load] %s backend: %s (CPU threads: %d)\n",
-            label, ggml_backend_name(bp.backend), n_threads);
+    fprintf(stderr, "[Load] %s backend: %s (CPU threads: %d)\n", label, ggml_backend_name(bp.backend), n_threads);
 
     bp.gpu_cc = 0;
 #ifdef ACESTEP_HAVE_CUDA
     if (!best_is_cpu) {
         int major = 0, minor = 0;
-        cudaDeviceGetAttribute(&major, 75, 0); // cudaDevAttrComputeCapabilityMajor
-        cudaDeviceGetAttribute(&minor, 76, 0); // cudaDevAttrComputeCapabilityMinor
+        cudaDeviceGetAttribute(&major, 75, 0);  // cudaDevAttrComputeCapabilityMajor
+        cudaDeviceGetAttribute(&minor, 76, 0);  // cudaDevAttrComputeCapabilityMinor
         bp.gpu_cc = major * 100 + minor * 10;
     }
 #endif
 
     g_backend_cache = bp;
-    g_backend_refs = 1;
+    g_backend_refs  = 1;
     return bp;
 }
 
 // Release a backend reference. Frees GPU + CPU backends when refcount hits 0.
 static void backend_release(ggml_backend_t backend, ggml_backend_t cpu_backend) {
-    if (g_backend_refs <= 0) return;
+    if (g_backend_refs <= 0) {
+        return;
+    }
     g_backend_refs--;
     if (g_backend_refs == 0) {
-        if (backend && backend != cpu_backend) ggml_backend_free(backend);
-        if (cpu_backend) ggml_backend_free(cpu_backend);
+        if (backend && backend != cpu_backend) {
+            ggml_backend_free(backend);
+        }
+        if (cpu_backend) {
+            ggml_backend_free(cpu_backend);
+        }
         g_backend_cache = {};
     }
 }
@@ -94,9 +100,9 @@ static void backend_release(ggml_backend_t backend, ggml_backend_t cpu_backend) 
 // Create a scheduler from a backend pair.
 // max_nodes: graph size hint (4096 for small models, 8192 for large)
 static ggml_backend_sched_t backend_sched_new(BackendPair bp, int max_nodes) {
-    ggml_backend_t backends[2] = { bp.backend, bp.cpu_backend };
-    int n = (bp.backend == bp.cpu_backend) ? 1 : 2;
-    ggml_backend_sched_t sched = ggml_backend_sched_new(backends, NULL, n, max_nodes, false, true);
+    ggml_backend_t       backends[2] = { bp.backend, bp.cpu_backend };
+    int                  n           = (bp.backend == bp.cpu_backend) ? 1 : 2;
+    ggml_backend_sched_t sched       = ggml_backend_sched_new(backends, NULL, n, max_nodes, false, true);
     if (!sched) {
         fprintf(stderr, "[Load] FATAL: failed to create scheduler\n");
         exit(1);

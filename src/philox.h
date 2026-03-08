@@ -10,8 +10,8 @@
 //   vals[1..3] discarded (one thread per element, one normal per thread).
 //
 
-#include <cstdint>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 
 // Philox constants (same as cuRAND / Random123)
@@ -30,9 +30,9 @@ struct Philox4 {
 
 // 32x32 -> (hi32, lo32)
 static inline void mulhilo32(uint32_t a, uint32_t b, uint32_t * hi, uint32_t * lo) {
-    uint64_t prod = (uint64_t)a * (uint64_t)b;
-    *lo = (uint32_t)prod;
-    *hi = (uint32_t)(prod >> 32);
+    uint64_t prod = (uint64_t) a * (uint64_t) b;
+    *lo           = (uint32_t) prod;
+    *hi           = (uint32_t) (prod >> 32);
 }
 
 // Single Philox round
@@ -52,41 +52,58 @@ static inline Philox4 philox_round(Philox4 ctr, uint32_t k0, uint32_t k1) {
 static inline Philox4 philox4x32_10(Philox4 ctr, uint32_t seed_lo, uint32_t seed_hi) {
     uint32_t k0 = seed_lo;
     uint32_t k1 = seed_hi;
-    ctr = philox_round(ctr, k0, k1); k0 += PHILOX_W0; k1 += PHILOX_W1;
-    ctr = philox_round(ctr, k0, k1); k0 += PHILOX_W0; k1 += PHILOX_W1;
-    ctr = philox_round(ctr, k0, k1); k0 += PHILOX_W0; k1 += PHILOX_W1;
-    ctr = philox_round(ctr, k0, k1); k0 += PHILOX_W0; k1 += PHILOX_W1;
-    ctr = philox_round(ctr, k0, k1); k0 += PHILOX_W0; k1 += PHILOX_W1;
-    ctr = philox_round(ctr, k0, k1); k0 += PHILOX_W0; k1 += PHILOX_W1;
-    ctr = philox_round(ctr, k0, k1); k0 += PHILOX_W0; k1 += PHILOX_W1;
-    ctr = philox_round(ctr, k0, k1); k0 += PHILOX_W0; k1 += PHILOX_W1;
-    ctr = philox_round(ctr, k0, k1); k0 += PHILOX_W0; k1 += PHILOX_W1;
+    ctr         = philox_round(ctr, k0, k1);
+    k0 += PHILOX_W0;
+    k1 += PHILOX_W1;
+    ctr = philox_round(ctr, k0, k1);
+    k0 += PHILOX_W0;
+    k1 += PHILOX_W1;
+    ctr = philox_round(ctr, k0, k1);
+    k0 += PHILOX_W0;
+    k1 += PHILOX_W1;
+    ctr = philox_round(ctr, k0, k1);
+    k0 += PHILOX_W0;
+    k1 += PHILOX_W1;
+    ctr = philox_round(ctr, k0, k1);
+    k0 += PHILOX_W0;
+    k1 += PHILOX_W1;
+    ctr = philox_round(ctr, k0, k1);
+    k0 += PHILOX_W0;
+    k1 += PHILOX_W1;
+    ctr = philox_round(ctr, k0, k1);
+    k0 += PHILOX_W0;
+    k1 += PHILOX_W1;
+    ctr = philox_round(ctr, k0, k1);
+    k0 += PHILOX_W0;
+    k1 += PHILOX_W1;
+    ctr = philox_round(ctr, k0, k1);
+    k0 += PHILOX_W0;
+    k1 += PHILOX_W1;
     ctr = philox_round(ctr, k0, k1);
     return ctr;
 }
 
 // cuRAND Box-Muller: 2 uint32 -> 2 N(0,1)
 static inline void box_muller(uint32_t u0, uint32_t u1, float * n0, float * n1) {
-    float u = (float)u0 * CURAND_2POW32_INV     + (CURAND_2POW32_INV     * 0.5f);
-    float v = (float)u1 * CURAND_2POW32_INV_2PI + (CURAND_2POW32_INV_2PI * 0.5f);
+    float u = (float) u0 * CURAND_2POW32_INV + (CURAND_2POW32_INV * 0.5f);
+    float v = (float) u1 * CURAND_2POW32_INV_2PI + (CURAND_2POW32_INV_2PI * 0.5f);
     float s = sqrtf(-2.0f * logf(u));
-    *n0 = s * sinf(v);
-    *n1 = s * cosf(v);
+    *n0     = s * sinf(v);
+    *n1     = s * cosf(v);
 }
 
 // Generate 4 N(0,1) for (seed, subsequence, offset)
 // counter = [offset_lo, offset_hi, subseq_lo, subseq_hi]
-static inline void philox_normal4(int64_t seed, int64_t subsequence, int64_t offset,
-                                  float out[4]) {
+static inline void philox_normal4(int64_t seed, int64_t subsequence, int64_t offset, float out[4]) {
     Philox4 ctr = {
-        (uint32_t)(offset),
-        (uint32_t)(offset >> 32),
-        (uint32_t)(subsequence),
-        (uint32_t)(subsequence >> 32),
+        (uint32_t) (offset),
+        (uint32_t) (offset >> 32),
+        (uint32_t) (subsequence),
+        (uint32_t) (subsequence >> 32),
     };
-    uint32_t slo = (uint32_t)(seed);
-    uint32_t shi = (uint32_t)((uint64_t)seed >> 32);
-    Philox4 r = philox4x32_10(ctr, slo, shi);
+    uint32_t slo = (uint32_t) (seed);
+    uint32_t shi = (uint32_t) ((uint64_t) seed >> 32);
+    Philox4  r   = philox4x32_10(ctr, slo, shi);
     box_muller(r.x, r.y, &out[0], &out[1]);
     box_muller(r.z, r.w, &out[2], &out[3]);
 }
