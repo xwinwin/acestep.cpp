@@ -1,7 +1,7 @@
 # acestep.cpp
 
 Portable C++17 implementation of ACE-Step 1.5 music generation using GGML.
-Text + lyrics in, stereo 48kHz WAV out. Runs on CPU, CUDA, ROCm, Metal, Vulkan.
+Text + lyrics in, stereo 48kHz MP3 or WAV out. Runs on CPU, CUDA, ROCm, Metal, Vulkan.
 
 ## Build
 
@@ -32,7 +32,7 @@ cmake .. -DGGML_CUDA=ON -DGGML_BLAS=ON
 cmake --build . --config Release -j$(nproc)
 ```
 
-Builds three binaries: `ace-qwen3` (LLM), `dit-vae` (DiT + VAE) and `neural-codec` (VAE encode/decode).
+Builds four binaries: `ace-qwen3` (LLM), `dit-vae` (DiT + VAE), `neural-codec` (VAE encode/decode) and `mp3-codec` (MP3 encoder/decoder).
 
 ## Models
 
@@ -99,7 +99,7 @@ EOF
     --request /tmp/request.json \
     --model models/acestep-5Hz-lm-4B-Q8_0.gguf
 
-# DiT+VAE: request0.json -> request00.wav
+# DiT+VAE: request0.json -> request00.mp3
 ./build/dit-vae \
     --request /tmp/request0.json \
     --text-encoder models/Qwen3-Embedding-0.6B-Q8_0.gguf \
@@ -219,8 +219,9 @@ The DiT was trained with this exact string as the no-vocal condition.
 **Passthrough** (`audio_codes` present): LLM is skipped entirely.
 Run `dit-vae` to decode existing codes. See `examples/dit-only.json`.
 
-**Reference audio** (`--src-audio` on CLI): no LLM needed. The source WAV
-is VAE-encoded to latent space and used as DiT context instead of silence.
+**Reference audio** (`--src-audio` on CLI): no LLM needed. The source audio
+(WAV or MP3, any sample rate) is resampled to 48kHz, VAE-encoded to latent
+space and used as DiT context instead of silence.
 `audio_cover_strength` in the JSON controls how many DiT steps see the source
 (0.5 = half the steps use source context, half use silence). The caption
 steers the style while the source provides structure, melody, and rhythm.
@@ -440,7 +441,7 @@ Required:
   --vae <gguf>            VAE GGUF file
 
 Reference audio:
-  --src-audio <wav>       Source audio (48kHz stereo WAV)
+  --src-audio <file>      Source audio (WAV or MP3, any sample rate)
 
 LoRA:
   --lora <path>           LoRA safetensors file or directory
@@ -449,7 +450,10 @@ LoRA:
 Batch:
   --batch <N>             DiT variations per request (default: 1, max 9)
 
-Output naming: input.json -> input0.wav, input1.wav, ... (last digit = batch index)
+Output:
+  Default: MP3 at 128 kbps. input.json -> input0.mp3, input1.mp3, ...
+  --mp3-bitrate <kbps>    MP3 bitrate (default: 128)
+  --wav                   Output WAV instead of MP3
 
 VAE tiling (memory control):
   --vae-chunk <N>         Latent frames per tile (default: 256)
@@ -471,9 +475,10 @@ static merge: inference runs at full speed with no adapter overhead.
 `--lora` accepts either a safetensors file or a directory containing
 `adapter_model.safetensors` and `adapter_config.json` (PEFT format).
 
-When `--src-audio` is provided, the source WAV is VAE-encoded once and
-injected as DiT context for every request. `audio_cover_strength` in the
-JSON controls how many steps use the source (default 0.5).
+When `--src-audio` is provided, the source audio (WAV or MP3, any sample rate)
+is resampled to 48kHz, VAE-encoded once and injected as DiT context for every
+request. `audio_cover_strength` in the JSON controls how many steps use the
+source (default 0.5).
 
 ## neural-codec reference
 
@@ -487,8 +492,8 @@ Usage: neural-codec --vae <gguf> --encode|--decode -i <input> [-o <o>] [--q8|--q
 
 Required:
   --vae <path>            VAE GGUF file
-  --encode | --decode     Encode WAV to latent, or decode latent to WAV
-  -i <path>               Input (WAV for encode, latent for decode)
+  --encode | --decode     Encode audio to latent, or decode latent to WAV
+  -i <path>               Input (WAV/MP3 for encode, latent for decode)
 
 Output:
   -o <path>               Output file (auto-named if omitted)
@@ -538,6 +543,28 @@ neural-codec --vae models/vae-BF16.gguf --encode --q8 -i song.wav -o song.nac8
 neural-codec --vae models/vae-BF16.gguf --decode -i song.nac4 -o song_decoded.wav
 
 # roundtrip validation: compare song.wav and song_decoded.wav with your ears
+```
+
+## mp3-codec reference
+
+Standalone MIT-licensed MPEG1 Layer III encoder and decoder. No external
+dependencies. The encoder is used by `dit-vae` for MP3 output. The decoder
+uses minimp3 (CC0). Reads WAV or MP3, writes WAV or MP3 (auto-detected
+from output extension).
+
+```
+Usage: mp3-codec -i <input> -o <o> [options]
+
+  -i <path>   Input file (WAV or MP3)
+  -o <path>   Output file (WAV or MP3)
+  -b <kbps>   Bitrate for MP3 encoding (default: 128)
+
+Mode is auto-detected from output extension.
+
+Examples:
+  mp3-codec -i song.wav -o song.mp3
+  mp3-codec -i song.wav -o song.mp3 -b 192
+  mp3-codec -i song.mp3 -o song.wav
 ```
 
 ## Architecture

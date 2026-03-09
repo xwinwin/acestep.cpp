@@ -30,6 +30,7 @@ add_subdirectory(ggml)
 macro(link_ggml_backends target)
     target_include_directories(${target} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}
     )
     target_include_directories(${target} SYSTEM PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/ggml/include

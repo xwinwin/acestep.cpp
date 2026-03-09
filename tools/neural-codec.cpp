@@ -25,9 +25,9 @@
 //   neural-codec --vae model.gguf --encode --q4 -i song.wav -o song.nac4
 //   neural-codec --vae model.gguf --decode -i song.nac4 -o song.wav
 
+#include "audio-io.h"
 #include "vae-enc.h"
 #include "vae.h"
-#include "wav.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -279,8 +279,8 @@ static void print_usage(const char * prog) {
             "Usage: %s --vae <gguf> --encode|--decode -i <input> [-o <output>] [--q8|--q4]\n\n"
             "Required:\n"
             "  --vae <path>            VAE GGUF file\n"
-            "  --encode | --decode     Encode WAV to latent, or decode latent to WAV\n"
-            "  -i <path>               Input (WAV for encode, latent for decode)\n\n"
+            "  --encode | --decode     Encode audio to latent, or decode latent to WAV\n"
+            "  -i <path>               Input (WAV/MP3 for encode, latent for decode)\n\n"
             "Output:\n"
             "  -o <path>               Output file (auto-named if omitted)\n"
             "  --q8                    Quantize latent to int8 (~13 kbit/s)\n"
@@ -384,14 +384,19 @@ int main(int argc, char ** argv) {
 
     // ENCODE
     if (mode == 0) {
-        int     T_audio = 0, sr = 0;
-        float * audio = read_wav(input_path, &T_audio, &sr);
-        if (!audio) {
+        int     T_audio = 0;
+        float * planar  = audio_read_48k(input_path, &T_audio);
+        if (!planar) {
             return 1;
         }
-        if (sr != 48000) {
-            fprintf(stderr, "[WARN] Input is %d Hz, VAE expects 48000. Resample with ffmpeg first.\n", sr);
+
+        // VAE expects interleaved [L0,R0,L1,R1,...], convert from planar
+        float * audio = (float *) malloc((size_t) T_audio * 2 * sizeof(float));
+        for (int t = 0; t < T_audio; t++) {
+            audio[t * 2 + 0] = planar[t];
+            audio[t * 2 + 1] = planar[T_audio + t];
         }
+        free(planar);
 
         VAEEncoder enc = {};
         vae_enc_load(&enc, vae_path);
@@ -399,8 +404,7 @@ int main(int argc, char ** argv) {
         int                max_T = (T_audio / 1920) + 64;
         std::vector<float> latent((size_t) max_T * 64);
 
-        fprintf(stderr, "\n[VAE] Encoding %d samples (%.2fs)...\n", T_audio,
-                (float) T_audio / (float) (sr > 0 ? sr : 48000));
+        fprintf(stderr, "\n[VAE] Encoding %d samples (%.2fs)...\n", T_audio, (float) T_audio / 48000.0f);
         int T_latent = vae_enc_encode_tiled(&enc, audio, T_audio, latent.data(), max_T, chunk_size, overlap);
         free(audio);
         if (T_latent < 0) {
@@ -443,7 +447,7 @@ int main(int argc, char ** argv) {
             return 1;
         }
 
-        if (write_wav(output_path, audio.data(), T_audio, 48000)) {
+        if (audio_write_wav(output_path, audio.data(), T_audio, 48000)) {
             fprintf(stderr, "\n[VAE] Output: %s (%d samples, %.2fs @ 48kHz)\n", output_path, T_audio,
                     (float) T_audio / 48000.0f);
         } else {

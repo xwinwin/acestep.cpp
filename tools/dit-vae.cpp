@@ -3,6 +3,7 @@
 // Usage: ./dit-vae [options]
 // See --help for full option list.
 
+#include "audio-io.h"
 #include "bpe.h"
 #include "cond-enc.h"
 #include "debug.h"
@@ -14,7 +15,6 @@
 #include "timer.h"
 #include "vae-enc.h"
 #include "vae.h"
-#include "wav.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -31,13 +31,16 @@ static void print_usage(const char * prog) {
             "  --dit <gguf>            DiT GGUF file\n"
             "  --vae <gguf>            VAE GGUF file\n\n"
             "Reference audio:\n"
-            "  --src-audio <wav>       Source audio (48kHz stereo WAV)\n\n"
+            "  --src-audio <file>      Source audio (WAV or MP3, any sample rate)\n\n"
             "LoRA:\n"
             "  --lora <path>           LoRA safetensors file or directory\n"
             "  --lora-scale <float>    LoRA scaling factor (default: 1.0)\n\n"
             "Batch:\n"
             "  --batch <N>             DiT variations per request (default: 1, max 9)\n\n"
-            "Output naming: input.json -> input0.wav, input1.wav, ... (last digit = batch index)\n\n"
+            "Output:\n"
+            "  Default: MP3 at 128 kbps. input.json -> input0.mp3, input1.mp3, ...\n"
+            "  --mp3-bitrate <kbps>    MP3 bitrate (default: 128)\n"
+            "  --wav                   Output WAV instead of MP3\n\n"
             "VAE tiling (memory control):\n"
             "  --vae-chunk <N>         Latent frames per tile (default: 256)\n"
             "  --vae-overlap <N>       Overlap frames per side (default: 64)\n\n"
@@ -87,6 +90,8 @@ int main(int argc, char ** argv) {
     int                       batch_n        = 1;
     int                       vae_chunk      = 256;
     int                       vae_overlap    = 64;
+    bool                      output_wav     = false;  // default MP3, --wav forces WAV
+    int                       mp3_kbps       = 128;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--request") == 0) {
@@ -116,6 +121,10 @@ int main(int argc, char ** argv) {
             vae_chunk = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--vae-overlap") == 0 && i + 1 < argc) {
             vae_overlap = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--wav") == 0) {
+            output_wav = true;
+        } else if (strcmp(argv[i], "--mp3-bitrate") == 0 && i + 1 < argc) {
+            mp3_kbps = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -219,16 +228,21 @@ int main(int argc, char ** argv) {
             return 1;
         }
         timer.reset();
-        int     T_audio = 0, wav_sr = 0;
-        float * wav_data = read_wav(src_audio_path, &T_audio, &wav_sr);
-        if (!wav_data) {
+        int     T_audio = 0;
+        float * planar  = audio_read_48k(src_audio_path, &T_audio);
+        if (!planar) {
             fprintf(stderr, "[Cover] FATAL: cannot read --src-audio %s\n", src_audio_path);
             return 1;
         }
-        if (wav_sr != 48000) {
-            fprintf(stderr, "[WARN] src_audio is %d Hz, VAE expects 48000. Resample with ffmpeg first.\n", wav_sr);
+        fprintf(stderr, "[Cover] Source audio: %.2fs @ 48kHz\n", (float) T_audio / 48000.0f);
+
+        // VAE expects interleaved [L0,R0,L1,R1,...], convert from planar
+        float * wav_data = (float *) malloc((size_t) T_audio * 2 * sizeof(float));
+        for (int t = 0; t < T_audio; t++) {
+            wav_data[t * 2 + 0] = planar[t];
+            wav_data[t * 2 + 1] = planar[T_audio + t];
         }
-        fprintf(stderr, "[Cover] Source audio: %.2fs\n", (float) T_audio / (float) (wav_sr > 0 ? wav_sr : 48000));
+        free(planar);
 
         vae_enc_load(&vae_enc, vae_gguf);
         int max_T_lat = (T_audio / 1920) + 64;
@@ -668,19 +682,20 @@ int main(int argc, char ** argv) {
                     }
                 }
 
-                // Write WAV: basename + batch_index + .wav
-                char wav_path[1024];
-                snprintf(wav_path, sizeof(wav_path), "%s%d.wav", basename.c_str(), b);
+                // Write output: basename + batch_index + extension
+                const char * ext = output_wav ? ".wav" : ".mp3";
+                char         out_path[1024];
+                snprintf(out_path, sizeof(out_path), "%s%d%s", basename.c_str(), b, ext);
 
                 if (b == 0) {
                     debug_dump_2d(&dbg, "vae_audio", audio.data(), 2, T_audio);
                 }
 
-                if (write_wav(wav_path, audio.data(), T_audio, 48000)) {
-                    fprintf(stderr, "[VAE Batch%d] Wrote %s: %d samples (%.2fs @ 48kHz stereo)\n", b, wav_path, T_audio,
+                if (audio_write(out_path, audio.data(), T_audio, 48000, mp3_kbps)) {
+                    fprintf(stderr, "[VAE Batch%d] Wrote %s: %d samples (%.2fs @ 48kHz stereo)\n", b, out_path, T_audio,
                             (float) T_audio / 48000.0f);
                 } else {
-                    fprintf(stderr, "[VAE Batch%d] FATAL: failed to write %s\n", b, wav_path);
+                    fprintf(stderr, "[VAE Batch%d] FATAL: failed to write %s\n", b, out_path);
                 }
             }
         }
