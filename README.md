@@ -25,7 +25,7 @@ cmake .. -DGGML_VULKAN=ON
 cmake --build . --config Release -j$(nproc)
 ```
 
-Builds five binaries: `ace-lm` (LLM), `ace-synth` (DiT + VAE), `ace-understand` (reverse: audio -> metadata), `neural-codec` (VAE encode/decode) and `mp3-codec` (MP3 encoder/decoder).
+Builds six binaries: `ace-lm` (LLM), `ace-synth` (DiT + VAE), `ace-understand` (reverse: audio -> metadata), `neural-codec` (VAE encode/decode), `mp3-codec` (MP3 encoder/decoder) and `quantize` (GGUF requantizer).
 
 ## Models
 
@@ -159,7 +159,7 @@ cat > /tmp/cover.json << 'EOF'
 EOF
 
 ./build/ace-synth \
-    --src-audio song.wav
+    --src-audio song.wav \
     --request /tmp/cover.json \
     --text-encoder models/Qwen3-Embedding-0.6B-Q8_0.gguf \
     --dit models/acestep-v15-turbo-Q8_0.gguf \
@@ -333,8 +333,8 @@ vocal content.
 Beats per minute. LLM generates one if 0.
 
 **`duration`** (float seconds, default `0` = unset)
-Target audio duration. `0` means the LLM picks it. Clamped to [1, 600]s after
-generation. `1` means 1 second.
+Target audio duration. `0` means the LLM picks it. FSM constrains LLM output
+to [10, 600]s; values <= 0 after generation fall back to 120s.
 
 **`keyscale`** (string, default `""` = unset)
 Musical key and scale, e.g. `"C major"`, `"F# minor"`. LLM fills if empty.
@@ -392,9 +392,11 @@ Sampling temperature for both phase 1 (lyrics/metadata) and phase 2 (audio
 codes). Lower = more deterministic.
 
 **`lm_cfg_scale`** (float, default `2.0`)
-Classifier-Free Guidance scale for the LM. Only active in phase 2 (audio
-code generation) and in phase 1 when lyrics are already provided. When
-`lyrics` is empty, phase 1 always runs with `cfg=1.0` (free sampling).
+Classifier-Free Guidance scale for the LM. Always active in phase 2 (audio
+code generation). In phase 1, CFG is disabled whenever textual expansion is
+happening (lyrics generation or CoT caption enrichment). In practice CFG
+only applies to phase 1 when lyrics are provided AND `use_cot_caption=false`,
+i.e. the LM is filling metadata fields without any free-text generation.
 `1.0` disables CFG.
 
 **`lm_top_p`** (float, default `0.9`)
@@ -632,6 +634,7 @@ Debug:
   --max-seq <N>           KV cache size (default: 8192)
   --no-fsm                Disable FSM constrained decoding
   --no-fa                 Disable flash attention
+  --dump <dir>            Dump tok_latents + tok_codes (skip LM)
 ```
 
 ## Architecture
