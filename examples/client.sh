@@ -6,7 +6,7 @@ set -eu
 
 curl -sf http://127.0.0.1:8085/lm \
     -H "Content-Type: application/json" \
-    -d @simple.json \
+    -d @full-sft.json \
 | jq '.[0]' > server-lm0.json
 
 curl -sf http://127.0.0.1:8085/synth \
