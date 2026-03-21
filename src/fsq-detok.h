@@ -106,9 +106,8 @@ static bool detok_ggml_load(DetokGGML * m, const char * gguf_path, ggml_backend_
     gf_close(&gf);
 
     // Scheduler
-    ggml_backend_t backends[2] = { backend, cpu_backend };
-    int            n           = (backend == cpu_backend) ? 1 : 2;
-    m->sched                   = ggml_backend_sched_new(backends, NULL, n, 4096, false, true);
+    BackendPair bp_detok = { backend, cpu_backend };
+    m->sched             = backend_sched_new(bp_detok, 4096);
     if (!m->sched) {
         fprintf(stderr, "[FSQ] FATAL: failed to create scheduler\n");
         return false;

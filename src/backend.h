@@ -6,11 +6,7 @@
 // qwen3.h, qwen3-lm.h, cond.h, dit.h, vae.h.
 
 #include "ggml-backend.h"
-#ifdef ACESTEP_HAVE_CUDA
-// Query compute capability without pulling in cuda_runtime.h.
-// cudaDeviceGetAttribute takes an int enum value; we pass the raw constants.
-extern "C" int cudaDeviceGetAttribute(int *, int, int);
-#endif
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -19,7 +15,6 @@ extern "C" int cudaDeviceGetAttribute(int *, int, int);
 struct BackendPair {
     ggml_backend_t backend;
     ggml_backend_t cpu_backend;
-    int            gpu_cc;  // CUDA compute capability (e.g. 720 for sm_72), 0 if not CUDA
 };
 
 // Cached backend state (shared across all modules in the same binary)
@@ -111,16 +106,6 @@ static BackendPair backend_init(const char * label) {
         exit(1);
     }
     fprintf(stderr, "[Load] %s backend: %s (CPU threads: %d)\n", label, ggml_backend_name(bp.backend), n_threads);
-
-    bp.gpu_cc = 0;
-#ifdef ACESTEP_HAVE_CUDA
-    if (!best_is_cpu) {
-        int major = 0, minor = 0;
-        cudaDeviceGetAttribute(&major, 75, 0);  // cudaDevAttrComputeCapabilityMajor
-        cudaDeviceGetAttribute(&minor, 76, 0);  // cudaDevAttrComputeCapabilityMinor
-        bp.gpu_cc = major * 100 + minor * 10;
-    }
-#endif
 
     g_backend_cache = bp;
     g_backend_refs  = 1;

@@ -23,6 +23,7 @@ static void usage(const char * prog) {
             "  --no-fsm               Disable FSM constrained decoding\n"
             "  --no-fa                Disable flash attention\n"
             "  --no-batch-cfg         Split CFG into two N=1 forwards\n"
+            "  --clamp-fp16           Clamp hidden states to FP16 range\n"
             "  --dump-logits <path>   Dump prefill logits (binary f32)\n"
             "  --dump-tokens <path>   Dump prompt token IDs (CSV)\n",
             prog);
@@ -54,6 +55,8 @@ int main(int argc, char ** argv) {
             params.use_fa = false;
         } else if (!strcmp(argv[i], "--no-batch-cfg")) {
             params.use_batch_cfg = false;
+        } else if (!strcmp(argv[i], "--clamp-fp16")) {
+            params.clamp_fp16 = true;
         } else if (!strcmp(argv[i], "--dump-logits") && i + 1 < argc) {
             dump_logits = argv[++i];
         } else if (!strcmp(argv[i], "--dump-tokens") && i + 1 < argc) {

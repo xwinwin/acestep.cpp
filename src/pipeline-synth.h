@@ -19,6 +19,7 @@ struct AceSynthParams {
     const char * lora_path;          // LoRA adapter path (NULL = no lora)
     float        lora_scale;         // 1.0
     bool         use_fa;             // flash attention (default: true)
+    bool         clamp_fp16;         // clamp hidden states to FP16 range (default: false)
     int          vae_chunk;          // latent frames per tile (default: 256)
     int          vae_overlap;        // overlap frames per side (default: 64)
     const char * dump_dir;           // intermediate tensor dump dir (NULL = disabled)

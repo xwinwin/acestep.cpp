@@ -110,9 +110,8 @@ static bool tok_ggml_load(TokGGML * m, const char * gguf_path, ggml_backend_t ba
     gf_close(&gf);
 
     // Scheduler
-    ggml_backend_t backends[2] = { backend, cpu_backend };
-    int            n           = (backend == cpu_backend) ? 1 : 2;
-    m->sched                   = ggml_backend_sched_new(backends, NULL, n, 4096, false, true);
+    BackendPair bp_tok = { backend, cpu_backend };
+    m->sched           = backend_sched_new(bp_tok, 4096);
     if (!m->sched) {
         fprintf(stderr, "[Tok] FATAL: failed to create scheduler\n");
         return false;

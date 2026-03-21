@@ -33,6 +33,7 @@ static void usage(const char * prog) {
             "  --vae-overlap <N>       Overlap frames per side (default: 64)\n\n"
             "Debug:\n"
             "  --no-fa                 Disable flash attention\n"
+            "  --clamp-fp16            Clamp hidden states to FP16 range\n"
             "  --dump <dir>            Dump intermediate tensors\n",
             prog);
 }
@@ -52,6 +53,7 @@ int main(int argc, char ** argv) {
     const char *              lora_path      = NULL;
     float                     lora_scale     = 1.0f;
     bool                      use_fa         = true;
+    bool                      clamp_fp16     = false;
     int                       vae_chunk      = 256;
     int                       vae_overlap    = 64;
     bool                      output_wav     = false;  // default MP3, --wav forces WAV
@@ -79,6 +81,8 @@ int main(int argc, char ** argv) {
             dump_dir = argv[++i];
         } else if (!strcmp(argv[i], "--no-fa")) {
             use_fa = false;
+        } else if (!strcmp(argv[i], "--clamp-fp16")) {
+            clamp_fp16 = true;
         } else if (!strcmp(argv[i], "--vae-chunk") && i + 1 < argc) {
             vae_chunk = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--vae-overlap") && i + 1 < argc) {
@@ -122,6 +126,7 @@ int main(int argc, char ** argv) {
     params.lora_path         = lora_path;
     params.lora_scale        = lora_scale;
     params.use_fa            = use_fa;
+    params.clamp_fp16        = clamp_fp16;
     params.vae_chunk         = vae_chunk;
     params.vae_overlap       = vae_overlap;
     params.dump_dir          = dump_dir;

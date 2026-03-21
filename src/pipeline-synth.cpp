@@ -80,6 +80,7 @@ void ace_synth_default_params(AceSynthParams * p) {
     p->lora_path         = NULL;
     p->lora_scale        = 1.0f;
     p->use_fa            = true;
+    p->clamp_fp16        = false;
     p->vae_chunk         = 256;
     p->vae_overlap       = 64;
     p->dump_dir          = NULL;
@@ -195,6 +196,7 @@ AceSynth * ace_synth_load(const AceSynthParams * params) {
     if (!params->use_fa) {
         ctx->cond_enc.use_flash_attn = false;
     }
+    ctx->cond_enc.clamp_fp16 = params->clamp_fp16;
     if (!cond_ggml_load(&ctx->cond_enc, params->dit_path)) {
         fprintf(stderr, "[CondEncoder] FATAL: failed to load\n");
         qwen3_free(&ctx->text_enc);
@@ -219,6 +221,12 @@ AceSynth * ace_synth_load(const AceSynthParams * params) {
     }
 
     fprintf(stderr, "[Ace-Synth] All models loaded, turbo=%s\n", ctx->is_turbo ? "yes" : "no");
+    if (!params->use_fa) {
+        fprintf(stderr, "[Ace-Synth] flash attention disabled\n");
+    }
+    if (params->clamp_fp16) {
+        fprintf(stderr, "[Ace-Synth] FP16 clamp enabled\n");
+    }
 
     return ctx;
 }

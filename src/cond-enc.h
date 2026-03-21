@@ -81,12 +81,7 @@ static void cond_ggml_init_backend(CondGGML * m) {
     m->cpu_backend    = bp.cpu_backend;
     m->sched          = backend_sched_new(bp, 8192);
     m->use_flash_attn = true;
-    // Sub-Ampere tensor cores accumulate in FP16 (max 65504).
-    // Deep encoders can overflow to inf, causing NaN in rms_norm.
-    m->clamp_fp16     = (bp.gpu_cc > 0 && bp.gpu_cc < 800);
-    if (m->clamp_fp16) {
-        fprintf(stderr, "[CondEncoder] FP16 clamp enabled (cc=%d)\n", bp.gpu_cc);
-    }
+    m->clamp_fp16     = false;
 }
 
 // Load from ACEStep DiT GGUF

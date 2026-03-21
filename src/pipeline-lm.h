@@ -17,6 +17,7 @@ struct AceLmParams {
     bool         use_fsm;        // constrained decoding (default: true)
     bool         use_fa;         // flash attention (default: true)
     bool         use_batch_cfg;  // batch cond+uncond in one forward (default: true)
+    bool         clamp_fp16;     // clamp hidden states to FP16 range (default: false)
 };
 
 void ace_lm_default_params(AceLmParams * p);
