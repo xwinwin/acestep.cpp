@@ -26,7 +26,7 @@ function load(): Saved {
 	} catch {
 		// corrupt or unavailable
 	}
-	return { name: '', volume: 0.5, format: 'mp3', dark: true, request: { caption: '' } };
+	return { name: '', volume: 0.5, format: 'mp3', dark: false, request: { caption: '' } };
 }
 
 const saved = load();
