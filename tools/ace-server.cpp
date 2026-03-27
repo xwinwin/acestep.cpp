@@ -1027,6 +1027,17 @@ int main(int argc, char ** argv) {
     httplib::Server svr;
     g_svr = &svr;
 
+    // SO_REUSEADDR: allow rebind after TIME_WAIT (normal restart).
+    // no SO_REUSEPORT: fail if another process is actively listening.
+    svr.set_socket_options([](socket_t sock) {
+        int one = 1;
+#ifdef _WIN32
+        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char *) &one, sizeof(one));
+#else
+        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+#endif
+    });
+
     // reject oversized bodies (120 MB: ~10min WAV stereo 48kHz 16-bit)
     svr.set_payload_max_length(120 * 1024 * 1024);
 
@@ -1078,7 +1089,7 @@ int main(int argc, char ** argv) {
     }
 
     // stop watchdog, then cleanup (all _free functions handle NULL)
-    fprintf(stderr, "\n[Server] Shutting down...\n");
+    fprintf(stderr, "[Server] Shutting down...\n");
     g_stop_watchdog.store(true, std::memory_order_relaxed);
     if (watchdog.joinable()) {
         watchdog.join();
