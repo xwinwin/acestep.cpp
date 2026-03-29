@@ -24,6 +24,7 @@
 
 #include "ggml.h"
 #include "gguf.h"
+#include "version.h"
 
 // Quant variant: base type + optional bump rules for important tensors
 struct QuantVariant {
@@ -172,6 +173,7 @@ static bool to_f32(const void * src, float * dst, int64_t n, enum ggml_type type
 
 int main(int argc, char ** argv) {
     if (argc != 4) {
+        fprintf(stderr, "acestep.cpp %s\n\n", ACE_VERSION);
         fprintf(stderr, "Usage: %s <input.gguf> <output.gguf> <type>\n", argv[0]);
         fprintf(stderr, "Types:");
         for (const auto & v : VARIANTS) {

@@ -12,6 +12,7 @@
 #include "audio-io.h"
 #include "pipeline-understand.h"
 #include "request.h"
+#include "version.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -19,6 +20,7 @@
 #include <string>
 
 static void usage(const char * prog) {
+    fprintf(stderr, "acestep.cpp %s\n\n", ACE_VERSION);
     fprintf(stderr,
             "Usage: %s [--src-audio <file> --dit <gguf> --vae <gguf> | --request <json>] --lm <gguf>\n"
             "\n"

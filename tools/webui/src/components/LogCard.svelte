@@ -71,6 +71,9 @@
 		font-size: 0.8rem;
 		text-align: left;
 	}
+	.card-header:hover {
+		background: var(--bg-btn-hover);
+	}
 	.card-label {
 		font-weight: 600;
 	}

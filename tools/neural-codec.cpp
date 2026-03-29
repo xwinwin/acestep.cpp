@@ -28,6 +28,7 @@
 #include "audio-io.h"
 #include "vae-enc.h"
 #include "vae.h"
+#include "version.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -275,6 +276,7 @@ static float * read_latent(const char * path, int * T_latent) {
 }
 
 static void print_usage(const char * prog) {
+    fprintf(stderr, "acestep.cpp %s\n\n", ACE_VERSION);
     fprintf(stderr,
             "Usage: %s --vae <gguf> --encode|--decode -i <input> [-o <output>] [--q8|--q4]\n\n"
             "Required:\n"

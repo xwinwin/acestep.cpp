@@ -47,6 +47,7 @@
 <div class="ace-app">
 	<header>
 		<span class="header-label">acestep.cpp</span>
+		<span class="header-version">{__ACE_VERSION__}</span>
 		<div class="spacer"></div>
 		<label class="dark-toggle">
 			<input type="checkbox" bind:checked={app.dark} /> Dark
@@ -139,6 +140,11 @@
 		font-size: 1.1rem;
 		font-weight: 600;
 		color: var(--fg);
+	}
+	.header-version {
+		font-size: 0.7rem;
+		color: var(--fg-dim);
+		align-self: flex-end;
 	}
 	.status-badge {
 		font-size: 0.7rem;

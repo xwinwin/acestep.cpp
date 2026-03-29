@@ -7,6 +7,7 @@
 // Encoder: acestep mp3enc (MIT). Decoder: minimp3 (CC0).
 
 #include "audio-io.h"
+#include "version.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -36,6 +37,7 @@ static bool ends_with(const char * str, const char * suffix) {
 
 int main(int argc, char ** argv) {
     if (argc < 5) {
+        fprintf(stderr, "acestep.cpp %s\n\n", ACE_VERSION);
         fprintf(stderr,
                 "Usage: %s -i <input> -o <output> [options]\n"
                 "\n"

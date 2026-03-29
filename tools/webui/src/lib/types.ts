@@ -35,6 +35,7 @@ export interface AceRequest {
 
 // GET /props response
 export interface AceProps {
+	version: string;
 	models: {
 		lm: string[];
 		embedding: string[];

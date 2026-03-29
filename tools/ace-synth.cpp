@@ -5,6 +5,7 @@
 #include "pipeline-synth.h"
 #include "request.h"
 #include "task-types.h"
+#include "version.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -13,6 +14,7 @@
 #include <vector>
 
 static void usage(const char * prog) {
+    fprintf(stderr, "acestep.cpp %s\n\n", ACE_VERSION);
     fprintf(stderr,
             "Usage: %s --request <json...> --embedding <gguf> --dit <gguf> --vae <gguf> [options]\n\n"
             "Required:\n"

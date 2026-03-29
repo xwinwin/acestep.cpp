@@ -4,6 +4,16 @@ project(acestep-ggml LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# version.h: embed git commit hash into all binaries.
+# runs on every build, only rewrites if the hash changed.
+set(VERSION_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/version.h")
+add_custom_target(version ALL
+    COMMAND "${CMAKE_COMMAND}" "-DSRC_DIR=${CMAKE_CURRENT_SOURCE_DIR}" "-DOUTPUT=${VERSION_OUTPUT}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/version.cmake"
+    BYPRODUCTS "${VERSION_OUTPUT}"
+    COMMENT "Checking git version"
+)
+
 # pthread: required explicitly on older glibc (< 2.34) where libpthread
 # is not merged into libc. Modern distros link it implicitly but aarch64
 # and older x86_64 toolchains need the explicit dependency.
@@ -45,6 +55,7 @@ macro(link_ggml_backends target)
     target_include_directories(${target} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_BINARY_DIR}
     )
     target_include_directories(${target} SYSTEM PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/ggml/include
@@ -70,6 +81,7 @@ macro(link_ggml_backends target)
             target_link_libraries(${target} PRIVATE ggml-${backend})
         endif()
     endforeach()
+    add_dependencies(${target} version)
 endmacro()
 
 # yyjson (MIT, fast JSON parser/writer)
@@ -138,7 +150,9 @@ add_executable(mp3-codec tools/mp3-codec.cpp)
 target_include_directories(mp3-codec PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}
 )
+add_dependencies(mp3-codec version)
 if(MSVC)
     target_compile_options(mp3-codec PRIVATE /W4 /wd4100 /wd4505)
 else()

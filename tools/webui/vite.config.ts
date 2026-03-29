@@ -1,9 +1,25 @@
 import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { viteSingleFile } from 'vite-plugin-singlefile';
+import { execSync } from 'child_process';
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { gzipSync } from 'zlib';
 import { resolve } from 'path';
+
+// git version baked at build time (same format as C++ ACE_VERSION)
+function gitVersion(): string {
+	try {
+		const hash = execSync('git rev-parse --short HEAD', { cwd: resolve(__dirname, '../..') })
+			.toString()
+			.trim();
+		const date = execSync('git show -s --format=%cs HEAD', { cwd: resolve(__dirname, '../..') })
+			.toString()
+			.trim();
+		return `${hash} (${date})`;
+	} catch {
+		return 'unknown';
+	}
+}
 
 // deterministic gzip of the inlined index.html into ../public/index.html.gz.
 // the .gz is committed to git so the C++ build works without npm.
@@ -40,6 +56,10 @@ function aceGzipPlugin() {
 
 export default defineConfig({
 	plugins: [svelte(), viteSingleFile(), aceGzipPlugin()],
+
+	define: {
+		__ACE_VERSION__: JSON.stringify(gitVersion())
+	},
 
 	// dev server: proxy ace-server endpoints
 	server: {

@@ -3,6 +3,7 @@
 
 #include "pipeline-lm.h"
 #include "request.h"
+#include "version.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -11,6 +12,7 @@
 #include <vector>
 
 static void usage(const char * prog) {
+    fprintf(stderr, "acestep.cpp %s\n\n", ACE_VERSION);
     fprintf(stderr,
             "Usage: %s --request <json> --lm <gguf> [options]\n"
             "\n"
