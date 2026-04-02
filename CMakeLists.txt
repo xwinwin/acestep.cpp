@@ -98,6 +98,7 @@ add_library(acestep-core STATIC
     src/request.cpp
     src/pipeline-lm.cpp
     src/pipeline-synth.cpp
+    src/pipeline-synth-ops.cpp
     src/pipeline-understand.cpp
 )
 target_link_libraries(acestep-core PUBLIC yyjson)
