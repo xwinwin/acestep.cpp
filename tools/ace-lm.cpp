@@ -96,7 +96,7 @@ int main(int argc, char ** argv) {
     if (lm_batch_size < 1) {
         lm_batch_size = 1;
     } else if (lm_batch_size > 9) {
-        fprintf(stderr, "[Request] WARNING: lm_batch_size %d clamped to 9\n", lm_batch_size);
+        fprintf(stderr, "[Ace-LM] WARNING: lm_batch_size %d clamped to 9\n", lm_batch_size);
         lm_batch_size = 9;
     }
 

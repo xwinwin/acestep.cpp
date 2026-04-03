@@ -154,11 +154,11 @@ int main(int argc, char ** argv) {
         int     T_audio = 0;
         float * planar  = audio_read_48k(src_audio_path, &T_audio);
         if (!planar) {
-            fprintf(stderr, "[Audio] FATAL: cannot read %s\n", src_audio_path);
+            fprintf(stderr, "[Ace-Understand] FATAL: cannot read %s\n", src_audio_path);
             ace_understand_free(ctx);
             return 1;
         }
-        fprintf(stderr, "[Audio] %.2fs @ 48kHz\n", (float) T_audio / 48000.0f);
+        fprintf(stderr, "[Ace-Understand] %.2fs @ 48kHz\n", (float) T_audio / 48000.0f);
 
         src_interleaved = audio_planar_to_interleaved(planar, T_audio);
         free(planar);

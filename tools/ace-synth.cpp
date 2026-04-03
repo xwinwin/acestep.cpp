@@ -148,18 +148,18 @@ int main(int argc, char ** argv) {
     int     src_len         = 0;
     if (src_audio_path) {
         if (!vae_gguf) {
-            fprintf(stderr, "[Cover] ERROR: --src-audio requires --vae\n");
+            fprintf(stderr, "[Ace-Synth] ERROR: --src-audio requires --vae\n");
             ace_synth_free(ctx);
             return 1;
         }
         int     T_audio = 0;
         float * planar  = audio_read_48k(src_audio_path, &T_audio);
         if (!planar) {
-            fprintf(stderr, "[Cover] FATAL: cannot read --src-audio %s\n", src_audio_path);
+            fprintf(stderr, "[Ace-Synth] FATAL: cannot read --src-audio %s\n", src_audio_path);
             ace_synth_free(ctx);
             return 1;
         }
-        fprintf(stderr, "[Cover] Source audio: %.2fs @ 48kHz\n", (float) T_audio / 48000.0f);
+        fprintf(stderr, "[Ace-Synth] Source audio: %.2fs @ 48kHz\n", (float) T_audio / 48000.0f);
 
         src_interleaved = audio_planar_to_interleaved(planar, T_audio);
         free(planar);
@@ -171,7 +171,7 @@ int main(int argc, char ** argv) {
     int     ref_len         = 0;
     if (ref_audio_path) {
         if (!vae_gguf) {
-            fprintf(stderr, "[Timbre] ERROR: --ref-audio requires --vae\n");
+            fprintf(stderr, "[Ace-Synth] ERROR: --ref-audio requires --vae\n");
             free(src_interleaved);
             free(ref_interleaved);
             ace_synth_free(ctx);
@@ -180,13 +180,13 @@ int main(int argc, char ** argv) {
         int     T_audio = 0;
         float * planar  = audio_read_48k(ref_audio_path, &T_audio);
         if (!planar) {
-            fprintf(stderr, "[Timbre] FATAL: cannot read --ref-audio %s\n", ref_audio_path);
+            fprintf(stderr, "[Ace-Synth] FATAL: cannot read --ref-audio %s\n", ref_audio_path);
             free(src_interleaved);
             free(ref_interleaved);
             ace_synth_free(ctx);
             return 1;
         }
-        fprintf(stderr, "[Timbre] Reference audio: %.2fs @ 48kHz\n", (float) T_audio / 48000.0f);
+        fprintf(stderr, "[Ace-Synth] Reference audio: %.2fs @ 48kHz\n", (float) T_audio / 48000.0f);
         ref_interleaved = audio_planar_to_interleaved(planar, T_audio);
         free(planar);
         ref_len = T_audio;
@@ -200,7 +200,7 @@ int main(int argc, char ** argv) {
         const char * rpath = request_paths[ri];
         request_init(&reqs[ri]);
         if (!request_parse(&reqs[ri], rpath)) {
-            fprintf(stderr, "[Request] FATAL: failed to parse %s\n", rpath);
+            fprintf(stderr, "[Ace-Synth] FATAL: failed to parse %s\n", rpath);
             ace_synth_free(ctx);
             free(src_interleaved);
             free(ref_interleaved);
@@ -208,7 +208,7 @@ int main(int argc, char ** argv) {
         }
         request_dump(&reqs[ri], stderr);
         if (reqs[ri].caption.empty() && reqs[ri].task_type != TASK_LEGO && reqs[ri].task_type != TASK_EXTRACT) {
-            fprintf(stderr, "[Request] FATAL: caption is empty in %s\n", rpath);
+            fprintf(stderr, "[Ace-Synth] FATAL: caption is empty in %s\n", rpath);
             ace_synth_free(ctx);
             free(src_interleaved);
             free(ref_interleaved);
@@ -221,7 +221,7 @@ int main(int argc, char ** argv) {
             basenames[ri] = basenames[ri].substr(0, dot);
         }
     }
-    fprintf(stderr, "[Pipeline] Batch: %d request(s)\n", batch_n);
+    fprintf(stderr, "[Ace-Synth] Batch: %d request(s)\n", batch_n);
 
     // process each request as a separate group (same codes = same T per group).
     // synth_batch_size variations within a group share the same T -> true GPU batch.
@@ -248,13 +248,13 @@ int main(int argc, char ** argv) {
         }
 
         if (batch_n > 1 || sbs > 1) {
-            fprintf(stderr, "[Pipeline] Group %d: %d track(s)\n", ri, sbs);
+            fprintf(stderr, "[Ace-Synth] Group %d: %d track(s)\n", ri, sbs);
         }
 
         std::vector<AceAudio> group_audio(sbs);
         if (ace_synth_generate(ctx, group.data(), src_interleaved, src_len, ref_interleaved, ref_len, sbs,
                                group_audio.data()) != 0) {
-            fprintf(stderr, "[Pipeline] ERROR: generation failed for group %d\n", ri);
+            fprintf(stderr, "[Ace-Synth] ERROR: generation failed for group %d\n", ri);
             for (auto & a : all_audio) {
                 ace_audio_free(&a);
             }
@@ -283,7 +283,7 @@ int main(int argc, char ** argv) {
         char         out_path[1024];
         snprintf(out_path, sizeof(out_path), "%s%d%s", all_basenames[b].c_str(), all_synth_indices[b], ext);
         if (!audio_write(out_path, all_audio[b].samples, all_audio[b].n_samples, 48000, mp3_kbps)) {
-            fprintf(stderr, "[Batch%d] FATAL: failed to write %s\n", b, out_path);
+            fprintf(stderr, "[Ace-Synth Batch%d] FATAL: failed to write %s\n", b, out_path);
         }
         ace_audio_free(&all_audio[b]);
     }
@@ -291,6 +291,6 @@ int main(int argc, char ** argv) {
     free(src_interleaved);
     free(ref_interleaved);
     ace_synth_free(ctx);
-    fprintf(stderr, "[Pipeline] All done\n");
+    fprintf(stderr, "[Ace-Synth] All done\n");
     return 0;
 }

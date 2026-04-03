@@ -96,7 +96,7 @@ void ace_understand_default_params(AceUnderstandParams * p) {
 
 AceUnderstand * ace_understand_load(const AceUnderstandParams * params) {
     if (!params->model_path && !params->shared_model && !params->dump_dir) {
-        fprintf(stderr, "[Understand] ERROR: model_path required (or shared_model, or dump_dir for tok-only)\n");
+        fprintf(stderr, "[Understand-Load] ERROR: model_path required (or shared_model, or dump_dir for tok-only)\n");
         return NULL;
     }
 
@@ -114,7 +114,7 @@ AceUnderstand * ace_understand_load(const AceUnderstandParams * params) {
 
     // Load VAE encoder (for audio encoding)
     if (params->vae_path) {
-        fprintf(stderr, "[VAE-Enc] Loading %s...\n", params->vae_path);
+        fprintf(stderr, "[Understand-Load] VAE-Enc loading %s...\n", params->vae_path);
         ctx->vae_enc = {};
         vae_enc_load(&ctx->vae_enc, params->vae_path);
         ctx->have_vae_enc = true;
@@ -126,13 +126,13 @@ AceUnderstand * ace_understand_load(const AceUnderstandParams * params) {
         // Load silence_latent from DiT GGUF (needed for FSQ tokenizer padding)
         GGUFModel gf = {};
         if (!gf_load(&gf, params->dit_path)) {
-            fprintf(stderr, "[DiT] FATAL: cannot open %s\n", params->dit_path);
+            fprintf(stderr, "[Understand-Load] FATAL: DiT cannot open %s\n", params->dit_path);
             delete ctx;
             return NULL;
         }
         const void * sl = gf_get_data(gf, "silence_latent");
         if (!sl) {
-            fprintf(stderr, "[DiT] FATAL: silence_latent not found in %s\n", params->dit_path);
+            fprintf(stderr, "[Understand-Load] FATAL: silence_latent not found in %s\n", params->dit_path);
             gf_close(&gf);
             delete ctx;
             return NULL;
@@ -147,13 +147,13 @@ AceUnderstand * ace_understand_load(const AceUnderstandParams * params) {
         // FSQ tokenizer (CPU backend, weights in DiT GGUF)
         ctx->fsq_backend = cpu_backend_new(backend_cpu_n_threads());
         if (!ctx->fsq_backend) {
-            fprintf(stderr, "[Tok] FATAL: failed to init CPU backend\n");
+            fprintf(stderr, "[Understand-Load] FATAL: Tok CPU backend init failed\n");
             delete ctx;
             return NULL;
         }
         ctx->fsq = {};
         if (!tok_ggml_load(&ctx->fsq, params->dit_path, ctx->fsq_backend, ctx->fsq_backend)) {
-            fprintf(stderr, "[Tok] FATAL: load failed\n");
+            fprintf(stderr, "[Understand-Load] FATAL: Tok load failed\n");
             ggml_backend_free(ctx->fsq_backend);
             delete ctx;
             return NULL;
@@ -171,7 +171,7 @@ AceUnderstand * ace_understand_load(const AceUnderstandParams * params) {
         ctx->bpe     = params->shared_bpe;
         ctx->owns_lm = false;
         ctx->have_lm = true;
-        fprintf(stderr, "[Load] LM: shared from pipeline-lm\n");
+        fprintf(stderr, "[Understand-Load] LM: shared from pipeline-lm\n");
 
         // FSM for constrained CoT metadata decoding
         if (params->use_fsm) {
@@ -189,7 +189,7 @@ AceUnderstand * ace_understand_load(const AceUnderstandParams * params) {
             return NULL;
         }
         ctx->model_storage.use_flash_attn = params->use_fa;
-        fprintf(stderr, "[Load] LM: %.0fms\n", t_load.ms());
+        fprintf(stderr, "[Understand-Load] LM: %.0fms\n", t_load.ms());
 
         ctx->model   = &ctx->model_storage;
         ctx->bpe     = &ctx->bpe_storage;
@@ -203,7 +203,7 @@ AceUnderstand * ace_understand_load(const AceUnderstandParams * params) {
     }
 
     ctx->load_ms = t_load.ms();
-    fprintf(stderr, "[Understand] Loaded in %.0fms\n", ctx->load_ms);
+    fprintf(stderr, "[Understand-Load] Loaded in %.0fms\n", ctx->load_ms);
     return ctx;
 }
 
@@ -249,10 +249,10 @@ int ace_understand_generate(AceUnderstand *    ctx,
         int T_25Hz = vae_enc_encode_tiled(&ctx->vae_enc, src_audio, src_len, latents.data(), max_T_lat,
                                           ctx->params.vae_chunk, ctx->params.vae_overlap);
         if (T_25Hz < 0) {
-            fprintf(stderr, "[VAE] FATAL: encode failed\n");
+            fprintf(stderr, "[Understand-VAE] FATAL: encode failed\n");
             return -1;
         }
-        fprintf(stderr, "[VAE] Encoded: %d latent frames (%.2fs), %.0fms\n", T_25Hz,
+        fprintf(stderr, "[Understand-VAE] Encoded: %d latent frames (%.2fs), %.0fms\n", T_25Hz,
                 (float) T_25Hz * 1920.0f / 48000.0f, t_vae.ms());
 
         // FSQ tokenize: latents [T_25Hz, 64] -> codes [T_5Hz]
@@ -261,11 +261,11 @@ int ace_understand_generate(AceUnderstand *    ctx,
         codes.resize(max_codes);
         int T_5Hz = tok_ggml_encode(&ctx->fsq, latents.data(), T_25Hz, codes.data(), ctx->silence.data());
         if (T_5Hz < 0) {
-            fprintf(stderr, "[Tok] FATAL: tokenize failed\n");
+            fprintf(stderr, "[Understand-Tok] FATAL: tokenize failed\n");
             return -1;
         }
         codes.resize(T_5Hz);
-        fprintf(stderr, "[Tok] %d codes (%.2fs @ 5Hz), %.0fms\n", T_5Hz, (float) T_5Hz / 5.0f, t_tok.ms());
+        fprintf(stderr, "[Understand-Tok] %d codes (%.2fs @ 5Hz), %.0fms\n", T_5Hz, (float) T_5Hz / 5.0f, t_tok.ms());
 
         // dump: save latents and codes for test-tok-cossim.py
         if (ctx->params.dump_dir) {
@@ -278,7 +278,7 @@ int ace_understand_generate(AceUnderstand *    ctx,
             if (fc) {
                 fwrite(codes.data(), sizeof(int), (size_t) T_5Hz, fc);
                 fclose(fc);
-                fprintf(stderr, "[Debug] tok_codes: [%d] int32\n", T_5Hz);
+                fprintf(stderr, "[Understand-Debug] tok_codes: [%d] int32\n", T_5Hz);
             }
         }
     } else {
@@ -288,7 +288,7 @@ int ace_understand_generate(AceUnderstand *    ctx,
             fprintf(stderr, "[Understand] ERROR: no audio and no audio_codes\n");
             return -1;
         }
-        fprintf(stderr, "[Request] %zu codes from request\n", codes.size());
+        fprintf(stderr, "[Understand] %zu codes from request\n", codes.size());
     }
 
     // dump-only mode (no LM loaded): return codes and exit
@@ -320,14 +320,14 @@ int ace_understand_generate(AceUnderstand *    ctx,
     // User: raw audio code tokens (not BPE text)
     // The LM sees the codes and generates metadata + lyrics
     std::vector<int> prompt = build_understand_prompt(*ctx->bpe, codes.data(), (int) codes.size());
-    fprintf(stderr, "[Prompt] %zu tokens (%zu codes + framing)\n", prompt.size(), codes.size());
+    fprintf(stderr, "[Understand-Prompt] %zu tokens (%zu codes + framing)\n", prompt.size(), codes.size());
 
     // Step 4: prefill
     Timer              t_gen;
     std::vector<float> logits(V);
     qw3lm_reset_kv(ctx->model, 0);
     qw3lm_forward(ctx->model, prompt.data(), (int) prompt.size(), 0, logits.data());
-    fprintf(stderr, "[Prefill] %.0fms, %zu tokens, seed=%u\n", t_gen.ms(), prompt.size(), seed);
+    fprintf(stderr, "[Understand-Prefill] %.0fms, %zu tokens, seed=%u\n", t_gen.ms(), prompt.size(), seed);
 
     // Step 5: autoregressive decode
     // No CFG, no batch. Single sequence, stop at <|im_end|>.
@@ -377,7 +377,7 @@ int ace_understand_generate(AceUnderstand *    ctx,
         qw3lm_forward(ctx->model, &tok, 1, 0, logits.data());
     }
 
-    fprintf(stderr, "[Decode] %zu tokens, %.0fms (%.1f tok/s)\n", gen_tokens.size(), t_gen.ms(),
+    fprintf(stderr, "[Understand-Decode] %zu tokens, %.0fms (%.1f tok/s)\n", gen_tokens.size(), t_gen.ms(),
             (float) gen_tokens.size() / (t_gen.ms() / 1000.0f));
 
     // Step 6: decode tokens to text, parse CoT metadata + lyrics
@@ -386,25 +386,26 @@ int ace_understand_generate(AceUnderstand *    ctx,
     parse_cot_and_lyrics(text, &parsed);
 
     if (parsed.bpm > 0) {
-        fprintf(stderr, "[Result] bpm: %d\n", parsed.bpm);
+        fprintf(stderr, "[Understand-Result] bpm: %d\n", parsed.bpm);
     }
     if (parsed.duration > 0) {
-        fprintf(stderr, "[Result] duration: %.0fs\n", parsed.duration);
+        fprintf(stderr, "[Understand-Result] duration: %.0fs\n", parsed.duration);
     }
     if (!parsed.keyscale.empty()) {
-        fprintf(stderr, "[Result] keyscale: %s\n", parsed.keyscale.c_str());
+        fprintf(stderr, "[Understand-Result] keyscale: %s\n", parsed.keyscale.c_str());
     }
     if (!parsed.timesignature.empty()) {
-        fprintf(stderr, "[Result] timesig: %s\n", parsed.timesignature.c_str());
+        fprintf(stderr, "[Understand-Result] timesig: %s\n", parsed.timesignature.c_str());
     }
     if (!parsed.vocal_language.empty()) {
-        fprintf(stderr, "[Result] language: %s\n", parsed.vocal_language.c_str());
+        fprintf(stderr, "[Understand-Result] language: %s\n", parsed.vocal_language.c_str());
     }
     if (!parsed.caption.empty()) {
-        fprintf(stderr, "[Result] caption: %.80s%s\n", parsed.caption.c_str(), parsed.caption.size() > 80 ? "..." : "");
+        fprintf(stderr, "[Understand-Result] caption: %.80s%s\n", parsed.caption.c_str(),
+                parsed.caption.size() > 80 ? "..." : "");
     }
     if (!parsed.lyrics.empty()) {
-        fprintf(stderr, "[Result] lyrics: %zu chars\n", parsed.lyrics.size());
+        fprintf(stderr, "[Understand-Result] lyrics: %zu chars\n", parsed.lyrics.size());
     }
 
     // Step 7: write output JSON (reusable as ace-synth input with codes)
@@ -427,7 +428,7 @@ int ace_understand_generate(AceUnderstand *    ctx,
         codes_str += std::to_string(codes[i]);
     }
     out->audio_codes = codes_str;
-    fprintf(stderr, "[Result] audio_codes: %zu codes\n", codes.size());
+    fprintf(stderr, "[Understand-Result] audio_codes: %zu codes\n", codes.size());
 
     // Set DiT defaults from model type (turbo vs SFT/base)
     if (ctx->is_turbo) {

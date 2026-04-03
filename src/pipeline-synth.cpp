@@ -92,15 +92,15 @@ AceSynth * ace_synth_load(const AceSynthParams * params) {
     if (!params->use_fa) {
         ctx->dit.use_flash_attn = false;
     }
-    fprintf(stderr, "[Load] Backend init: %.1f ms\n", timer.ms());
+    fprintf(stderr, "[Synth-Load] Backend init: %.1f ms\n", timer.ms());
 
     timer.reset();
     if (!dit_ggml_load(&ctx->dit, params->dit_path, ctx->dit_cfg, params->lora_path, params->lora_scale)) {
-        fprintf(stderr, "[DiT] FATAL: failed to load model\n");
+        fprintf(stderr, "[Synth-Load] FATAL: DiT load failed\n");
         delete ctx;
         return NULL;
     }
-    fprintf(stderr, "[Load] DiT weight load: %.1f ms\n", timer.ms());
+    fprintf(stderr, "[Synth-Load] DiT weight load: %.1f ms\n", timer.ms());
 
     ctx->Oc     = ctx->dit_cfg.out_channels;           // 64
     ctx->ctx_ch = ctx->dit_cfg.in_channels - ctx->Oc;  // 128
@@ -115,9 +115,9 @@ AceSynth * ace_synth_load(const AceSynthParams * params) {
             if (sl_data) {
                 ctx->silence_full.resize(15000 * 64);
                 memcpy(ctx->silence_full.data(), sl_data, 15000 * 64 * sizeof(float));
-                fprintf(stderr, "[Load] silence_latent: [15000, 64] from GGUF\n");
+                fprintf(stderr, "[Synth-Load] silence_latent: [15000, 64] from GGUF\n");
             } else {
-                fprintf(stderr, "[DiT] FATAL: silence_latent tensor not found in %s\n", params->dit_path);
+                fprintf(stderr, "[Synth-Load] FATAL: silence_latent not found in %s\n", params->dit_path);
                 gf_close(&gf);
                 dit_ggml_free(&ctx->dit);
                 delete ctx;
@@ -125,7 +125,7 @@ AceSynth * ace_synth_load(const AceSynthParams * params) {
             }
             gf_close(&gf);
         } else {
-            fprintf(stderr, "[DiT] FATAL: cannot reopen %s for metadata\n", params->dit_path);
+            fprintf(stderr, "[Synth-Load] FATAL: cannot reopen %s for metadata\n", params->dit_path);
             dit_ggml_free(&ctx->dit);
             delete ctx;
             return NULL;
@@ -137,14 +137,14 @@ AceSynth * ace_synth_load(const AceSynthParams * params) {
     if (params->vae_path) {
         timer.reset();
         vae_ggml_load(&ctx->vae, params->vae_path);
-        fprintf(stderr, "[Load] VAE weights: %.1f ms\n", timer.ms());
+        fprintf(stderr, "[Synth-Load] VAE weights: %.1f ms\n", timer.ms());
         ctx->have_vae = true;
     }
 
     // BPE tokenizer
     timer.reset();
     if (!load_bpe_from_gguf(&ctx->bpe, params->text_encoder_path)) {
-        fprintf(stderr, "[BPE] FATAL: failed to load tokenizer from %s\n", params->text_encoder_path);
+        fprintf(stderr, "[Synth-Load] FATAL: BPE load failed from %s\n", params->text_encoder_path);
         dit_ggml_free(&ctx->dit);
         if (ctx->have_vae) {
             vae_ggml_free(&ctx->vae);
@@ -152,7 +152,7 @@ AceSynth * ace_synth_load(const AceSynthParams * params) {
         delete ctx;
         return NULL;
     }
-    fprintf(stderr, "[Load] BPE tokenizer: %.1f ms\n", timer.ms());
+    fprintf(stderr, "[Synth-Load] BPE tokenizer: %.1f ms\n", timer.ms());
 
     // Text encoder forward (caption only)
     timer.reset();
@@ -162,7 +162,7 @@ AceSynth * ace_synth_load(const AceSynthParams * params) {
         ctx->text_enc.use_flash_attn = false;
     }
     if (!qwen3_load_text_encoder(&ctx->text_enc, params->text_encoder_path)) {
-        fprintf(stderr, "[TextEncoder] FATAL: failed to load\n");
+        fprintf(stderr, "[Synth-Load] FATAL: TextEncoder load failed\n");
         dit_ggml_free(&ctx->dit);
         if (ctx->have_vae) {
             vae_ggml_free(&ctx->vae);
@@ -170,7 +170,7 @@ AceSynth * ace_synth_load(const AceSynthParams * params) {
         delete ctx;
         return NULL;
     }
-    fprintf(stderr, "[Load] TextEncoder: %.1f ms\n", timer.ms());
+    fprintf(stderr, "[Synth-Load] TextEncoder: %.1f ms\n", timer.ms());
 
     // Condition encoder forward
     timer.reset();
@@ -181,7 +181,7 @@ AceSynth * ace_synth_load(const AceSynthParams * params) {
     }
     ctx->cond_enc.clamp_fp16 = params->clamp_fp16;
     if (!cond_ggml_load(&ctx->cond_enc, params->dit_path)) {
-        fprintf(stderr, "[CondEncoder] FATAL: failed to load\n");
+        fprintf(stderr, "[Synth-Load] FATAL: CondEncoder load failed\n");
         qwen3_free(&ctx->text_enc);
         dit_ggml_free(&ctx->dit);
         if (ctx->have_vae) {
@@ -190,7 +190,7 @@ AceSynth * ace_synth_load(const AceSynthParams * params) {
         delete ctx;
         return NULL;
     }
-    fprintf(stderr, "[Load] ConditionEncoder: %.1f ms\n", timer.ms());
+    fprintf(stderr, "[Synth-Load] ConditionEncoder: %.1f ms\n", timer.ms());
 
     // Detokenizer (for audio_codes mode, weights in DiT GGUF)
     timer.reset();
@@ -200,7 +200,7 @@ AceSynth * ace_synth_load(const AceSynthParams * params) {
             ctx->detok.use_flash_attn = false;
         }
         ctx->have_detok = true;
-        fprintf(stderr, "[Load] Detokenizer: %.1f ms\n", timer.ms());
+        fprintf(stderr, "[Synth-Load] Detokenizer: %.1f ms\n", timer.ms());
     }
 
     // Tokenizer (for FSQ roundtrip in cover mode, weights in DiT GGUF)
@@ -208,7 +208,7 @@ AceSynth * ace_synth_load(const AceSynthParams * params) {
     ctx->tok = {};
     if (tok_ggml_load(&ctx->tok, params->dit_path, ctx->dit.backend, ctx->dit.cpu_backend)) {
         ctx->have_tok = true;
-        fprintf(stderr, "[Load] Tokenizer: %.1f ms\n", timer.ms());
+        fprintf(stderr, "[Synth-Load] Tokenizer: %.1f ms\n", timer.ms());
     }
 
     fprintf(stderr, "[Ace-Synth] All models loaded, turbo=%s\n", ctx->is_turbo ? "yes" : "no");
@@ -291,6 +291,27 @@ int ace_synth_generate(AceSynth *         ctx,
         return -1;
     }
 
+    // Resolve repaint quality params from repaint_strength.
+    // Python: _resolve_repaint_config("balanced", strength).
+    // 0.0 = aggressive, 0.5 = balanced (default), 1.0 = conservative.
+    {
+        float rs = s.rr.repaint_strength;
+        if (rs < 0.0f) {
+            rs = 0.0f;
+        }
+        if (rs > 1.0f) {
+            rs = 1.0f;
+        }
+        float inv                  = 1.0f - rs;
+        s.repaint_injection_ratio  = inv;
+        s.repaint_crossfade_frames = (int) (25.0f * inv + 0.5f);
+        s.repaint_wav_cf_sec       = 0.05f * inv;
+        if (s.is_repaint || s.is_lego_region) {
+            fprintf(stderr, "[Synth] repaint_strength=%.2f -> injection=%.2f, crossfade=%d frames, wav_cf=%.0fms\n", rs,
+                    s.repaint_injection_ratio, s.repaint_crossfade_frames, s.repaint_wav_cf_sec * 1000.0f);
+        }
+    }
+
     // Mode routing: per-task instruction, use_source_context, validation.
     //    All task knowledge lives here. Adding a mode = adding one branch.
     //    Track name is UPPERCASE in instructions (matches Python task_utils.py).
@@ -326,13 +347,12 @@ int ace_synth_generate(AceSynth *         ctx,
                     }
                 }
                 if (!valid) {
-                    fprintf(stderr, "[%s] WARNING: '%s' is not a standard track name\n", s.task.c_str(),
-                            s.rr.track.c_str());
+                    fprintf(stderr, "[Lego] WARNING: '%s' is not a standard track name\n", s.rr.track.c_str());
                 }
             }
-            fprintf(stderr, "[Pipeline] task=%s\n", s.task.c_str());
+            fprintf(stderr, "[Synth] task=%s\n", s.task.c_str());
             if (ctx->is_turbo) {
-                fprintf(stderr, "[Pipeline] WARNING: lego requires base model, turbo output incoherent\n");
+                fprintf(stderr, "[Synth] WARNING: lego requires base model, turbo output incoherent\n");
             }
             if (s.is_lego_region) {
                 if (ops_clamp_region(s) != 0) {
@@ -352,13 +372,12 @@ int ace_synth_generate(AceSynth *         ctx,
                     }
                 }
                 if (!valid) {
-                    fprintf(stderr, "[%s] WARNING: '%s' is not a standard track name\n", s.task.c_str(),
-                            s.rr.track.c_str());
+                    fprintf(stderr, "[Extract] WARNING: '%s' is not a standard track name\n", s.rr.track.c_str());
                 }
             }
-            fprintf(stderr, "[Pipeline] task=%s\n", s.task.c_str());
+            fprintf(stderr, "[Synth] task=%s\n", s.task.c_str());
             if (ctx->is_turbo) {
-                fprintf(stderr, "[Pipeline] WARNING: extract requires base model, turbo output incoherent\n");
+                fprintf(stderr, "[Synth] WARNING: extract requires base model, turbo output incoherent\n");
             }
         } else if (s.task == TASK_COMPLETE) {
             s.use_source_context      = true;
@@ -373,33 +392,19 @@ int ace_synth_generate(AceSynth *         ctx,
                     }
                 }
                 if (!valid) {
-                    fprintf(stderr, "[%s] WARNING: '%s' is not a standard track name\n", s.task.c_str(),
-                            s.rr.track.c_str());
+                    fprintf(stderr, "[Complete] WARNING: '%s' is not a standard track name\n", s.rr.track.c_str());
                 }
             }
-            fprintf(stderr, "[Pipeline] task=%s\n", s.task.c_str());
+            fprintf(stderr, "[Synth] task=%s\n", s.task.c_str());
             if (ctx->is_turbo) {
-                fprintf(stderr, "[Pipeline] WARNING: complete requires base model, turbo output incoherent\n");
+                fprintf(stderr, "[Synth] WARNING: complete requires base model, turbo output incoherent\n");
             }
         }
         // validation: tasks that need source audio or codes
         if (s.use_source_context && !s.have_cover && !s.have_codes) {
-            fprintf(stderr, "[%s] ERROR: requires source audio or audio codes\n", s.task.c_str());
+            fprintf(stderr, "[Synth] ERROR: task '%s' requires source audio or audio codes\n", s.task.c_str());
             return -1;
         }
-    }
-
-    // Resolve repaint quality params from repaint_strength.
-    // Python: _resolve_repaint_config("balanced", strength).
-    // 0.0 = aggressive, 0.5 = balanced (default), 1.0 = conservative.
-    {
-        float rs              = s.rr.repaint_strength;
-        if (rs < 0.0f) { rs = 0.0f; }
-        if (rs > 1.0f) { rs = 1.0f; }
-        float inv             = 1.0f - rs;
-        s.repaint_injection_ratio  = inv;
-        s.repaint_crossfade_frames = (int) (25.0f * inv + 0.5f);
-        s.repaint_wav_cf_sec       = 0.05f * inv;
     }
 
     // Encode timbre from ref_audio (independent of task)

@@ -96,11 +96,11 @@ int ops_encode_src(AceSynth * ctx, const float * src_audio, int src_len, SynthSt
                                          ctx->params.vae_chunk, ctx->params.vae_overlap);
         vae_enc_free(&vae_enc);
         if (s.T_cover < 0) {
-            fprintf(stderr, "[VAE-Enc] FATAL: encode failed\n");
+            fprintf(stderr, "[Encode-Src] FATAL: encode failed\n");
             return -1;
         }
         s.cover_latents.resize(s.T_cover * 64);
-        fprintf(stderr, "[Cover] Encoded: T_cover=%d (%.2fs), %.1f ms\n", s.T_cover,
+        fprintf(stderr, "[Encode-Src] Encoded: T_cover=%d (%.2fs), %.1f ms\n", s.T_cover,
                 (float) s.T_cover * 1920.0f / 48000.0f, s.timer.ms());
 
         s.have_cover = true;
@@ -130,7 +130,7 @@ void ops_fsq_roundtrip(AceSynth * ctx, SynthState & s) {
             if (ret >= 0) {
                 int copy_T = T_25Hz_rt < s.T_cover ? T_25Hz_rt : s.T_cover;
                 memcpy(s.cover_latents.data(), rt_latents.data(), (size_t) copy_T * 64 * sizeof(float));
-                fprintf(stderr, "[Cover] FSQ roundtrip: %d->%d->%d frames, %.1f ms\n", s.T_cover, T_5Hz_actual, copy_T,
+                fprintf(stderr, "[FSQ-Roundtrip] %d->%d->%d frames, %.1f ms\n", s.T_cover, T_5Hz_actual, copy_T,
                         s.timer.ms());
             }
         }
@@ -153,14 +153,15 @@ int ops_resolve_params(AceSynth * ctx, const AceRequest * reqs, int batch_n, Syn
         s.num_steps = ctx->is_turbo ? 8 : 50;
     }
     if (s.num_steps > 100) {
-        fprintf(stderr, "[Pipeline] WARNING: inference_steps %d clamped to 100\n", s.num_steps);
+        fprintf(stderr, "[Resolve-Params] WARNING: inference_steps %d clamped to 100\n", s.num_steps);
         s.num_steps = 100;
     }
 
     if (s.guidance_scale <= 0.0f) {
         s.guidance_scale = 1.0f;
     } else if (ctx->is_turbo && s.guidance_scale > 1.0f) {
-        fprintf(stderr, "[Pipeline] WARNING: turbo model, forcing guidance_scale=1.0 (was %.1f)\n", s.guidance_scale);
+        fprintf(stderr, "[Resolve-Params] WARNING: turbo model, forcing guidance_scale=1.0 (was %.1f)\n",
+                s.guidance_scale);
         s.guidance_scale = 1.0f;
     }
 
@@ -183,11 +184,11 @@ int ops_resolve_params(AceSynth * ctx, const AceRequest * reqs, int batch_n, Syn
         }
     }
     if (s.have_codes) {
-        fprintf(stderr, "[Pipeline] max audio codes across batch: %d (%.1fs @ 5Hz)\n", s.max_codes_len,
+        fprintf(stderr, "[Resolve-Params] max audio codes across batch: %d (%.1fs @ 5Hz)\n", s.max_codes_len,
                 (float) s.max_codes_len / 5.0f);
     }
     if (s.have_codes && !ctx->have_detok) {
-        fprintf(stderr, "[Detokenizer] FATAL: failed to load\n");
+        fprintf(stderr, "[Resolve-Params] FATAL: detokenizer not found\n");
         return -1;
     }
 
@@ -217,7 +218,7 @@ int ops_resolve_T(AceSynth * ctx, SynthState & s) {
     } else if (s.use_source_context) {
         // source context requested but neither cover_latents nor codes available.
         // duration fallthrough would produce a meaningless T for source tasks.
-        fprintf(stderr, "[Pipeline] FATAL: use_source_context but no cover_latents and no audio_codes\n");
+        fprintf(stderr, "[Resolve-T] FATAL: use_source_context but no cover_latents and no audio_codes\n");
         return -1;
     } else {
         s.T = (int) (s.duration * FRAMES_PER_SECOND);
@@ -226,12 +227,12 @@ int ops_resolve_T(AceSynth * ctx, SynthState & s) {
     s.S     = s.T / ctx->dit_cfg.patch_size;
     s.enc_S = 0;
 
-    fprintf(stderr, "[Pipeline] T=%d, S=%d\n", s.T, s.S);
-    fprintf(stderr, "[Pipeline] seed=%lld, steps=%d, guidance=%.1f, shift=%.1f, duration=%.1fs\n",
+    fprintf(stderr, "[Resolve-T] T=%d, S=%d\n", s.T, s.S);
+    fprintf(stderr, "[Resolve-T] seed=%lld, steps=%d, guidance=%.1f, shift=%.1f, duration=%.1fs\n",
             (long long) s.rr.seed, s.num_steps, s.guidance_scale, s.shift, s.duration);
 
     if (s.T > 15000) {
-        fprintf(stderr, "[Pipeline] ERROR: T=%d exceeds silence_latent max 15000, skipping\n", s.T);
+        fprintf(stderr, "[Resolve-T] ERROR: T=%d exceeds silence_latent max 15000, skipping\n", s.T);
         return -1;
     }
 
@@ -255,10 +256,10 @@ int ops_clamp_region(SynthState & s) {
         s.re = src_dur;
     }
     if (s.re <= s.rs) {
-        fprintf(stderr, "[Repaint] ERROR: repainting_end (%.1f) <= repainting_start (%.1f)\n", s.re, s.rs);
+        fprintf(stderr, "[Clamp-Region] ERROR: repainting_end (%.1f) <= repainting_start (%.1f)\n", s.re, s.rs);
         return -1;
     }
-    fprintf(stderr, "[%s] Region: %.1fs..%.1fs (src=%.1fs)\n", s.task.c_str(), s.rs, s.re, src_dur);
+    fprintf(stderr, "[Clamp-Region] %.1fs..%.1fs (src=%.1fs)\n", s.rs, s.re, src_dur);
     return 0;
 }
 
@@ -278,7 +279,7 @@ void ops_encode_timbre(AceSynth * ctx, const float * ref_audio, int ref_len, Syn
                                                         ctx->params.vae_chunk, ctx->params.vae_overlap);
         vae_enc_free(&ref_vae);
         if (T_ref < 0) {
-            fprintf(stderr, "[Timbre] WARNING: ref_audio encode failed, using silence\n");
+            fprintf(stderr, "[Encode-Timbre] WARNING: ref_audio encode failed, using silence\n");
             memcpy(s.timbre_feats.data(), ctx->silence_full.data(), S_REF_TIMBRE * 64 * sizeof(float));
         } else {
             int copy_n = T_ref < S_REF_TIMBRE ? T_ref : S_REF_TIMBRE;
@@ -287,7 +288,7 @@ void ops_encode_timbre(AceSynth * ctx, const float * ref_audio, int ref_len, Syn
                 memcpy(s.timbre_feats.data() + (size_t) copy_n * 64, ctx->silence_full.data() + (size_t) copy_n * 64,
                        (size_t) (S_REF_TIMBRE - copy_n) * 64 * sizeof(float));
             }
-            fprintf(stderr, "[Timbre] ref_audio: %d frames (%.1fs), %.1f ms\n", copy_n, (float) copy_n / 25.0f,
+            fprintf(stderr, "[Encode-Timbre] ref_audio: %d frames (%.1fs), %.1f ms\n", copy_n, (float) copy_n / 25.0f,
                     s.timer.ms());
         }
     } else {
@@ -322,7 +323,7 @@ int ops_encode_text(AceSynth * ctx, const AceRequest * reqs, int batch_n, SynthS
 
     // instruction_str must be set by the orchestrator. Empty means unknown task or bug.
     if (s.instruction_str.empty()) {
-        fprintf(stderr, "[Encode] FATAL: instruction_str is empty (unknown task or orchestrator bug)\n");
+        fprintf(stderr, "[Encode-Text] FATAL: instruction_str is empty (unknown task or orchestrator bug)\n");
         return -1;
     }
 
@@ -368,7 +369,7 @@ int ops_encode_text(AceSynth * ctx, const AceRequest * reqs, int batch_n, SynthS
         s.timer.reset();
         cond_ggml_forward(&ctx->cond_enc, text_hidden.data(), S_text, lyric_embed.data(), S_lyric,
                           s.timbre_feats.data(), S_REF_TIMBRE, s.per_enc[b], &s.per_enc_S[b]);
-        fprintf(stderr, "[Encode Batch%d] %d+%d tokens -> enc_S=%d, %.1f ms\n", b, S_text, S_lyric, s.per_enc_S[b],
+        fprintf(stderr, "[Encode-Text Batch%d] %d+%d tokens -> enc_S=%d, %.1f ms\n", b, S_text, S_lyric, s.per_enc_S[b],
                 s.timer.ms());
 
         if (b == 0) {
@@ -418,7 +419,7 @@ int ops_encode_text(AceSynth * ctx, const AceRequest * reqs, int batch_n, SynthS
 
             cond_ggml_forward(&ctx->cond_enc, text_hidden.data(), S_text, lyric_embed.data(), S_lyric,
                               s.timbre_feats.data(), S_REF_TIMBRE, s.per_enc_nc[b], &s.per_enc_S_nc[b]);
-            fprintf(stderr, "[Encode Batch%d] non-cover: %d+%d tokens -> enc_S=%d\n", b, S_text, S_lyric,
+            fprintf(stderr, "[Encode-Text Batch%d] non-cover: %d+%d tokens -> enc_S=%d\n", b, S_text, S_lyric,
                     s.per_enc_S_nc[b]);
         }
     }
@@ -460,7 +461,7 @@ int ops_encode_text(AceSynth * ctx, const AceRequest * reqs, int batch_n, SynthS
     }
 
     if (batch_n > 1) {
-        fprintf(stderr, "[Encode] Per-batch encoding done: max_enc_S=%d\n", s.max_enc_S);
+        fprintf(stderr, "[Encode-Text] Per-batch encoding done: max_enc_S=%d\n", s.max_enc_S);
     }
 
     return 0;
@@ -485,7 +486,7 @@ int ops_build_context(AceSynth * ctx, const AceRequest * reqs, int batch_n, Synt
         if (s.repaint_t0 > s.T) {
             s.repaint_t0 = s.T;
         }
-        fprintf(stderr, "[Repaint] Latent frames: [%d, %d) / %d\n", s.repaint_t0, s.repaint_t1, s.T);
+        fprintf(stderr, "[Build-Context] Latent frames: [%d, %d) / %d\n", s.repaint_t0, s.repaint_t1, s.T);
     }
 
     s.context.resize(batch_n * s.T * s.ctx_ch);
@@ -525,7 +526,7 @@ int ops_build_context(AceSynth * ctx, const AceRequest * reqs, int batch_n, Synt
         // use_source_context with neither cover nor codes is an invalid state:
         // the orchestrator promised source context but provided nothing to condition on.
         if (s.use_source_context && !s.have_codes) {
-            fprintf(stderr, "[Context] FATAL: use_source_context but no cover_latents and no audio_codes\n");
+            fprintf(stderr, "[Build-Context] FATAL: use_source_context but no cover_latents and no audio_codes\n");
             return -1;
         }
 
@@ -545,10 +546,10 @@ int ops_build_context(AceSynth * ctx, const AceRequest * reqs, int batch_n, Synt
 
                 int ret = detok_ggml_decode(&ctx->detok, codes_b.data(), T_5Hz, decoded_latents.data());
                 if (ret < 0) {
-                    fprintf(stderr, "[Detokenizer Batch%d] FATAL: decode failed\n", b);
+                    fprintf(stderr, "[Build-Context Batch%d] FATAL: detokenizer decode failed\n", b);
                     return -1;
                 }
-                fprintf(stderr, "[Context Batch%d] Detokenizer: %.1f ms, %d codes\n", b, s.timer.ms(), T_5Hz);
+                fprintf(stderr, "[Build-Context Batch%d] Detokenizer: %.1f ms, %d codes\n", b, s.timer.ms(), T_5Hz);
 
                 decoded_T = T_25Hz_codes < s.T ? T_25Hz_codes : s.T;
                 if (b == 0) {
@@ -599,7 +600,7 @@ void ops_build_context_silence(AceSynth * ctx, int batch_n, SynthState & s) {
                        s.T * s.ctx_ch * sizeof(float));
             }
             s.cover_steps = (int) ((float) s.num_steps * cover_strength);
-            fprintf(stderr, "[Cover] audio_cover_strength=%.2f -> switch at step %d/%d\n", cover_strength,
+            fprintf(stderr, "[Context-Silence] audio_cover_strength=%.2f -> switch at step %d/%d\n", cover_strength,
                     s.cover_steps, s.num_steps);
         }
     }
@@ -613,7 +614,8 @@ void ops_init_noise_and_repaint(AceSynth * ctx, const AceRequest * reqs, int bat
     for (int b = 0; b < batch_n; b++) {
         float * dst = s.noise.data() + b * s.Oc * s.T;
         philox_randn(reqs[b].seed, dst, s.Oc * s.T, /*bf16_round=*/true);
-        fprintf(stderr, "[Context Batch%d] Philox noise seed=%lld, [%d, %d]\n", b, (long long) reqs[b].seed, s.T, s.Oc);
+        fprintf(stderr, "[Init-Noise Batch%d] Philox noise seed=%lld, [%d, %d]\n", b, (long long) reqs[b].seed, s.T,
+                s.Oc);
     }
 
     // cover_noise_strength: blend initial s.noise with source latents.
@@ -650,7 +652,8 @@ void ops_init_noise_and_repaint(AceSynth * ctx, const AceRequest * reqs, int bat
         if (s.cover_steps >= 0) {
             s.cover_steps = (int) ((float) s.num_steps * s.rr.audio_cover_strength);
         }
-        fprintf(stderr, "[Cover] cover_noise_strength=%.2f -> noise_level=%.4f, nearest_t=%.4f, remaining_steps=%d\n",
+        fprintf(stderr,
+                "[Init-Noise] cover_noise_strength=%.2f -> noise_level=%.4f, nearest_t=%.4f, remaining_steps=%d\n",
                 s.rr.cover_noise_strength, effective_noise_level, nearest_t, s.num_steps);
     }
 
@@ -668,8 +671,8 @@ void ops_init_noise_and_repaint(AceSynth * ctx, const AceRequest * reqs, int bat
     debug_dump_2d(&s.dbg, "noise", s.noise.data(), s.T, s.Oc);
     debug_dump_2d(&s.dbg, "context", s.context.data(), s.T, s.ctx_ch);
 
-    fprintf(stderr, "[DiT] Starting: T=%d, S=%d, enc_S=%d, steps=%d, batch=%d%s\n", s.T, s.S, s.enc_S, s.num_steps,
-            batch_n, s.use_source_context ? " (cover)" : "");
+    fprintf(stderr, "[Init-Noise] Starting: T=%d, S=%d, enc_S=%d, steps=%d, batch=%d%s\n", s.T, s.S, s.enc_S,
+            s.num_steps, batch_n, s.use_source_context ? " (cover)" : "");
 
     // repaint/lego-region injection buffer: full cover latents padded with silence.
     // used for step injection and boundary blend in both repaint and lego-region modes.
@@ -686,18 +689,18 @@ void ops_init_noise_and_repaint(AceSynth * ctx, const AceRequest * reqs, int bat
 // ops_dit_generate
 int ops_dit_generate(AceSynth * ctx, int batch_n, SynthState & s, bool (*cancel)(void *), void * cancel_data) {
     s.timer.reset();
-    int dit_rc = dit_ggml_generate(
-        &ctx->dit, s.noise.data(), s.context.data(), s.enc_hidden.data(), s.enc_S, s.T, batch_n, s.num_steps,
-        s.schedule.data(), s.output.data(), s.guidance_scale, &s.dbg,
-        s.context_silence.empty() ? nullptr : s.context_silence.data(), s.cover_steps, cancel, cancel_data,
-        s.per_S.data(), s.per_enc_S.data(), s.enc_hidden_nc.empty() ? nullptr : s.enc_hidden_nc.data(),
-        s.per_enc_S_nc_final.empty() ? nullptr : s.per_enc_S_nc_final.data(),
-        s.repaint_src.empty() ? nullptr : s.repaint_src.data(), s.repaint_t0, s.repaint_t1,
-        s.repaint_injection_ratio, s.repaint_crossfade_frames);
+    int dit_rc = dit_ggml_generate(&ctx->dit, s.noise.data(), s.context.data(), s.enc_hidden.data(), s.enc_S, s.T,
+                                   batch_n, s.num_steps, s.schedule.data(), s.output.data(), s.guidance_scale, &s.dbg,
+                                   s.context_silence.empty() ? nullptr : s.context_silence.data(), s.cover_steps,
+                                   cancel, cancel_data, s.per_S.data(), s.per_enc_S.data(),
+                                   s.enc_hidden_nc.empty() ? nullptr : s.enc_hidden_nc.data(),
+                                   s.per_enc_S_nc_final.empty() ? nullptr : s.per_enc_S_nc_final.data(),
+                                   s.repaint_src.empty() ? nullptr : s.repaint_src.data(), s.repaint_t0, s.repaint_t1,
+                                   s.repaint_injection_ratio, s.repaint_crossfade_frames);
     if (dit_rc != 0) {
         return -1;
     }
-    fprintf(stderr, "[DiT] Total generation: %.1f ms (%.1f ms/sample)\n", s.timer.ms(), s.timer.ms() / batch_n);
+    fprintf(stderr, "[DiT-Generate] Total: %.1f ms (%.1f ms/sample)\n", s.timer.ms(), s.timer.ms() / batch_n);
 
     debug_dump_2d(&s.dbg, "dit_output", s.output.data(), s.T, s.Oc);
     return 0;
@@ -736,16 +739,16 @@ int ops_vae_decode_and_splice(AceSynth *    ctx,
             if (T_audio < 0) {
                 // check if this was a cancellation or a real error
                 if (cancel && cancel(cancel_data)) {
-                    fprintf(stderr, "[VAE Batch%d] Cancelled\n", b);
+                    fprintf(stderr, "[VAE-Decode Batch%d] Cancelled\n", b);
                     return -1;
                 }
-                fprintf(stderr, "[VAE Batch%d] ERROR: decode failed\n", b);
+                fprintf(stderr, "[VAE-Decode Batch%d] ERROR: decode failed\n", b);
                 out[b].samples     = NULL;
                 out[b].n_samples   = 0;
                 out[b].sample_rate = 48000;
                 continue;
             }
-            fprintf(stderr, "[VAE Batch%d] Decode: %.1f ms\n", b, s.timer.ms());
+            fprintf(stderr, "[VAE-Decode Batch%d] Decode: %.1f ms\n", b, s.timer.ms());
 
             if (b == 0) {
                 debug_dump_2d(&s.dbg, "vae_audio", audio.data(), 2, T_audio);
@@ -799,7 +802,7 @@ int ops_vae_decode_and_splice(AceSynth *    ctx,
                             pred[si] = src_audio[(size_t) si * 2 + ch];
                         }
                     }
-                    fprintf(stderr, "[Splice Batch%d] wav splice %.1fs-%.1fs cf=%.0fms\n", b, s.rs, s.re,
+                    fprintf(stderr, "[WAV-Splice Batch%d] wav splice %.1fs-%.1fs cf=%.0fms\n", b, s.rs, s.re,
                             s.repaint_wav_cf_sec * 1000.0f);
                 }
             }

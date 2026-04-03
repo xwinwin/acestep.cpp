@@ -78,7 +78,7 @@ static std::vector<std::string> generate_phase1_batch(Qwen3LM *                m
         }
     }
 
-    fprintf(stderr, "[Phase1] Prefill %.0fms, %zu tokens, N=%d, CFG=%.2f\n", t_prefill.ms(), prompt_tokens.size(), N,
+    fprintf(stderr, "[LM-Phase1] Prefill %.0fms, %zu tokens, N=%d, CFG=%.2f\n", t_prefill.ms(), prompt_tokens.size(), N,
             cfg_scale);
 
     // Per-element state
@@ -164,7 +164,7 @@ static std::vector<std::string> generate_phase1_batch(Qwen3LM *                m
 
     for (int step = 0; step < max_new_tokens && n_active > 0; step++) {
         if (cancel && cancel(cancel_data)) {
-            fprintf(stderr, "[Phase1] Cancelled at step %d\n", step);
+            fprintf(stderr, "[LM-Phase1] Cancelled at step %d\n", step);
             return {};
         }
         for (int i = 0; i < N; i++) {
@@ -243,18 +243,18 @@ static std::vector<std::string> generate_phase1_batch(Qwen3LM *                m
 
         if ((step + 1) % 100 == 0) {
             double elapsed = t_decode.ms() / 1000.0;
-            fprintf(stderr, "[Phase1] Step %d, %d active, %.1f tok/s\n", step + 1, n_active,
+            fprintf(stderr, "[LM-Phase1] Step %d, %d active, %.1f tok/s\n", step + 1, n_active,
                     (double) (step + 1) * N / elapsed);
         }
     }
 
-    fprintf(stderr, "[Phase1] Decode %.0fms\n", t_decode.ms());
+    fprintf(stderr, "[LM-Phase1] Decode %.0fms\n", t_decode.ms());
 
     // Decode tokens to text
     std::vector<std::string> results(N);
     for (int i = 0; i < N; i++) {
         results[i] = bpe_decode(*bpe, seqs[i].gen_tokens);
-        fprintf(stderr, "[Phase1 Batch%d] seed=%lld, %zu tokens\n", i, base_seed + i, seqs[i].gen_tokens.size());
+        fprintf(stderr, "[LM-Phase1 Batch%d] seed=%lld, %zu tokens\n", i, base_seed + i, seqs[i].gen_tokens.size());
     }
     return results;
 }
@@ -287,7 +287,7 @@ static std::vector<std::string> run_phase2_batch(Qwen3LM *                      
         const AcePrompt & a   = shared_prompt ? aces[0] : aces[i];
         std::string       cot = build_cot_yaml(a);
         if (i == 0) {
-            fprintf(stderr, "[Phase2] N=%d, CoT[0]:\n%s", N, cot.c_str());
+            fprintf(stderr, "[LM-Phase2] N=%d, CoT[0]:\n%s", N, cot.c_str());
         }
         prompts[i] = build_lm_prompt_with_cot(bpe, a, cot);
         if (use_cfg) {
@@ -298,7 +298,7 @@ static std::vector<std::string> run_phase2_batch(Qwen3LM *                      
             max_tokens = mt;
         }
     }
-    fprintf(stderr, "[Phase2] max_tokens: %d, CFG: %.2f, seeds: %lld..%lld\n", max_tokens, cfg_scale, base_seed,
+    fprintf(stderr, "[LM-Phase2] max_tokens: %d, CFG: %.2f, seeds: %lld..%lld\n", max_tokens, cfg_scale, base_seed,
             base_seed + N - 1);
 
     // Reset all KV sets: cond [0..N-1], uncond [N..2N-1]
@@ -345,7 +345,7 @@ static std::vector<std::string> run_phase2_batch(Qwen3LM *                      
     }
 
     double prefill_ms = t_prefill.ms();
-    fprintf(stderr, "[Phase2] Prefill %.0fms (%s)\n", prefill_ms,
+    fprintf(stderr, "[LM-Phase2] Prefill %.0fms (%s)\n", prefill_ms,
             shared_prompt ? "shared, 1 cond + 1 uncond" : "individual, N cond + N uncond");
 
     // Per-sequence state
@@ -427,7 +427,7 @@ static std::vector<std::string> run_phase2_batch(Qwen3LM *                      
 
     for (int step = 0; step < max_tokens && n_active > 0; step++) {
         if (cancel && cancel(cancel_data)) {
-            fprintf(stderr, "[Phase2] Cancelled at step %d\n", step);
+            fprintf(stderr, "[LM-Phase2] Cancelled at step %d\n", step);
             return {};
         }
         int current_active = 0;
@@ -522,19 +522,19 @@ static std::vector<std::string> run_phase2_batch(Qwen3LM *                      
 
         if ((step + 1) % 50 == 0) {
             double elapsed = t_decode.ms() / 1000.0;
-            fprintf(stderr, "[Decode] Step %d, %d active, %d total codes, %.1f tok/s\n", step + 1, n_active,
+            fprintf(stderr, "[LM-Phase2] Step %d, %d active, %d total codes, %.1f tok/s\n", step + 1, n_active,
                     total_codes, (double) (step + 1) * N / elapsed);
         }
     }
 
     double decode_ms = t_decode.ms();
-    fprintf(stderr, "[Phase2] Decode %.0fms\n", decode_ms);
+    fprintf(stderr, "[LM-Phase2] Decode %.0fms\n", decode_ms);
 
     // Build results
     std::vector<std::string> results(N);
     for (int i = 0; i < N; i++) {
         results[i] = codes_to_string(seqs[i].audio_codes);
-        fprintf(stderr, "[Batch %d] seed=%lld, %zu codes\n", i, base_seed + i, seqs[i].audio_codes.size());
+        fprintf(stderr, "[LM-Phase2 Batch%d] seed=%lld, %zu codes\n", i, base_seed + i, seqs[i].audio_codes.size());
     }
     return results;
 }
@@ -669,7 +669,7 @@ int ace_lm_generate(AceLm *            ctx,
     // ONE path: fill what's missing, then generate codes.
     // JSON is the instruction. Empty field = "fill it". Filled = "don't touch".
     if (user_has_codes && !skip_codes) {
-        fprintf(stderr, "[Pass] audio_codes present, skip LM\n");
+        fprintf(stderr, "[LM-Generate] audio_codes present, skip LM\n");
     } else if (skip_codes || need_fill) {
         // inspire/format modes always run Phase 1 with their own instruction.
         // generate mode uses the inspire instruction when lyrics are empty.
@@ -729,8 +729,8 @@ int ace_lm_generate(AceLm *            ctx,
             active_fsm = &ctx->fsm;
         }
 
-        const char * mode_name = skip_codes ? (mode == LM_MODE_INSPIRE ? "Inspire" : "Format") : "Fill";
-        fprintf(stderr, "[%s] lyrics=%s metas=%s | %zu tokens, CFG: %.2f, N=%d\n", mode_name,
+        const char * mode_name = skip_codes ? (mode == LM_MODE_INSPIRE ? "inspire" : "format") : "fill";
+        fprintf(stderr, "[LM-Generate] mode=%s lyrics=%s metas=%s | %zu tokens, CFG: %.2f, N=%d\n", mode_name,
                 gen_lyrics ? "generate" : "keep", has_all_metas ? "complete" : "fill gaps", prompt.size(), fill_cfg,
                 lm_batch_size);
 
@@ -769,7 +769,7 @@ int ace_lm_generate(AceLm *            ctx,
                 }
                 fprintf(f, "\n");
                 fclose(f);
-                fprintf(stderr, "[Debug] Tokens -> %s (%zu)\n", dump_tokens, dbg_prompt.size());
+                fprintf(stderr, "[LM-Debug] Tokens -> %s (%zu)\n", dump_tokens, dbg_prompt.size());
             }
         }
         if (dump_logits) {
@@ -779,7 +779,8 @@ int ace_lm_generate(AceLm *            ctx,
             if (f) {
                 fwrite(dbg_logits.data(), sizeof(float), ctx->model.cfg.vocab_size, f);
                 fclose(f);
-                fprintf(stderr, "[Debug] Logits -> %s (%d floats, argmax=%d)\n", dump_logits, ctx->model.cfg.vocab_size,
+                fprintf(stderr, "[LM-Debug] Logits -> %s (%d floats, argmax=%d)\n", dump_logits,
+                        ctx->model.cfg.vocab_size,
                         (int) (std::max_element(dbg_logits.begin(), dbg_logits.end()) - dbg_logits.begin()));
             }
             qw3lm_reset_kv(&ctx->model, 0);
@@ -789,7 +790,8 @@ int ace_lm_generate(AceLm *            ctx,
     // Phase 2: generate audio codes (skip for inspire/format modes)
     std::vector<std::string> batch_codes(lm_batch_size);
     if (skip_codes) {
-        fprintf(stderr, "[Skip] %s mode, no audio code generation\n", mode == LM_MODE_INSPIRE ? "Inspire" : "Format");
+        fprintf(stderr, "[LM-Generate] %s mode, no audio code generation\n",
+                mode == LM_MODE_INSPIRE ? "Inspire" : "Format");
     } else if (!user_has_codes) {
         batch_codes = run_phase2_batch(&ctx->model, ctx->bpe, aces, temperature, top_p, top_k, seed, lm_batch_size,
                                        cfg_scale, neg_prompt, ctx->params.use_batch_cfg, cancel, cancel_data);
@@ -797,7 +799,7 @@ int ace_lm_generate(AceLm *            ctx,
             return -1;
         }
     } else {
-        fprintf(stderr, "[Skip] User audio_codes present, no code generation\n");
+        fprintf(stderr, "[LM-Generate] User audio_codes present, no code generation\n");
     }
 
     // Write N output requests
