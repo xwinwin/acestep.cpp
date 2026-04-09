@@ -314,7 +314,7 @@ static void audio_normalize(float * audio, int n_total) {
 
     // partial sort to find the 99.5th percentile
     size_t idx995 = (size_t) ((double) (n_total - 1) * 0.995);
-    std::nth_element(absvals.begin(), absvals.begin() + (ptrdiff_t) idx995, absvals.end());
+    std::nth_element(absvals.begin(), absvals.begin() + idx995, absvals.end());
     float p995 = absvals[idx995];
 
     if (p995 < 1e-6f) {
