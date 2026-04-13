@@ -216,30 +216,6 @@ int ops_resolve_T(AceSynth * ctx, SynthState & s) {
     return 0;
 }
 
-// ops_clamp_region
-int ops_clamp_region(SynthState & s) {
-    // Clamp rs/re to source duration. Caller ensures this is a region task.
-    float src_dur = (float) s.T_cover * 1920.0f / 48000.0f;
-    if (s.rs < 0.0f) {
-        s.rs = 0.0f;
-    }
-    if (s.re < 0.0f) {
-        s.re = src_dur;
-    }
-    if (s.rs > src_dur) {
-        s.rs = src_dur;
-    }
-    if (s.re > src_dur) {
-        s.re = src_dur;
-    }
-    if (s.re <= s.rs) {
-        fprintf(stderr, "[Clamp-Region] ERROR: repainting_end (%.1f) <= repainting_start (%.1f)\n", s.re, s.rs);
-        return -1;
-    }
-    fprintf(stderr, "[Clamp-Region] %.1fs..%.1fs (src=%.1fs)\n", s.rs, s.re, src_dur);
-    return 0;
-}
-
 // ops_encode_timbre
 void ops_encode_timbre(AceSynth * ctx, const float * ref_audio, int ref_len, SynthState & s) {
     // Timbre features from ref_audio (independent of src_audio).

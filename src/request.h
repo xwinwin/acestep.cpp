@@ -46,10 +46,11 @@ struct AceRequest {
     float audio_cover_strength;  // 1.0 (0-1, fraction of DiT steps using source context)
     float cover_noise_strength;  // 0.0 (0-1, how close to source: 0=pure noise, 1=source)
 
-    // repaint mode (requires source audio)
-    // Both -1 = no repaint (plain cover). One or both >= 0 activates repaint.
-    // -1 on start means 0s, -1 on end means source duration.
-    float repainting_start;  // -1
+    // repaint region (requires source audio)
+    // start: seconds offset. 0 = source start. Negative = outpaint before source.
+    // end: seconds offset. Negative = source duration (sentinel).
+    //      Values beyond source duration outpaint after source.
+    float repainting_start;  // 0
     float repainting_end;    // -1
 
     // repaint/lego region quality (Python _resolve_repaint_config).

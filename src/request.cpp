@@ -38,7 +38,7 @@ void request_init(AceRequest * r) {
     r->shift                = 0.0f;  // 0 = auto (turbo: 3.0, base/sft: 1.0)
     r->audio_cover_strength = 1.0f;
     r->cover_noise_strength = 0.0f;
-    r->repainting_start     = -1.0f;
+    r->repainting_start     = 0.0f;
     r->repainting_end       = -1.0f;
     r->repaint_strength     = 0.5f;
     r->task_type            = "";
@@ -413,7 +413,7 @@ void request_dump(const AceRequest * r, FILE * f) {
         fprintf(f, "[Request] cover: strength=%.2f noise_strength=%.2f\n", r->audio_cover_strength,
                 r->cover_noise_strength);
     }
-    if (r->repainting_start >= 0.0f || r->repainting_end >= 0.0f) {
+    if (r->repainting_start != 0.0f || r->repainting_end >= 0.0f) {
         fprintf(f, "[Request] repaint: start=%.1f end=%.1f strength=%.2f\n", r->repainting_start, r->repainting_end,
                 r->repaint_strength);
     }

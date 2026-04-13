@@ -279,8 +279,15 @@ regenerates a time region of the source audio while preserving the rest.
 The DiT receives a binary mask: 1.0 inside the region (generate), 0.0 outside
 (keep original). Source latents outside the region provide context; silence
 fills the repaint zone. `repainting_start` and `repainting_end` define the
-region in seconds. -1 on start means 0s, -1 on end means source duration.
-`audio_cover_strength` is ignored in repaint mode (the mask handles everything).
+region in seconds. Default start is 0, default end is source duration (sentinel
+`-1`). `audio_cover_strength` is ignored in repaint mode (the mask handles
+everything).
+
+Outpainting: coordinates may extend beyond source bounds. A negative start
+outpaints before the source (silence padding prepended). An end beyond source
+duration outpaints after (silence padding appended). The source audio is padded
+with silence before VAE encoding so that T_cover reflects the extended canvas.
+Coordinates are shifted into the padded reference frame.
 
 ```bash
 cat > /tmp/repaint.json << 'EOF'
@@ -290,6 +297,20 @@ cat > /tmp/repaint.json << 'EOF'
     "lyrics": "[Instrumental]",
     "repainting_start": 10.0,
     "repainting_end": 25.0,
+    "inference_steps": 50,
+    "guidance_scale": 1.0,
+    "shift": 1.0
+}
+EOF
+
+# Outpaint: generate 5s before the song and 10s after
+cat > /tmp/outpaint.json << 'EOF'
+{
+    "task_type": "repaint",
+    "caption": "Smooth jazz intro building into the main theme",
+    "lyrics": "[Instrumental]",
+    "repainting_start": -5.0,
+    "repainting_end": 40.0,
     "inference_steps": 50,
     "guidance_scale": 1.0,
     "shift": 1.0
@@ -372,6 +393,11 @@ All other tasks with source audio use raw VAE latents (no FSQ).
 
 ### Region-mode pipeline (repaint + lego with region)
 
+Region coordinates are resolved in a unified block after mode routing:
+`s.rs += left_pad_sec; s.re += left_pad_sec`. When outpainting is active,
+source audio has been padded with silence before VAE encoding, so T_cover
+and all downstream latent operations naturally reflect the extended canvas.
+
 Three mechanisms stack on top of each other when a repaint region is active:
 
 1. **Step injection** (denoising loop, first 50% of steps): frames outside the
@@ -432,7 +458,7 @@ the LLM fills them, or a sensible runtime default is applied.
     "shift":                0.0,
     "audio_cover_strength": 1.0,
     "cover_noise_strength": 0.0,
-    "repainting_start":     -1,
+    "repainting_start":     0,
     "repainting_end":       -1,
     "task_type":            "",
     "track":                "",
@@ -527,11 +553,15 @@ diffusion starts. `0.0` = pure noise (default). `1.0` = start nearly identical
 to the source. The schedule is truncated to the nearest timestep matching the
 noise level. `cover_steps` is recalculated against the remaining steps.
 
-**`repainting_start`** (float seconds, default `-1`)
+**`repainting_start`** (float seconds, default `0`)
 **`repainting_end`** (float seconds, default `-1`)
-Region boundaries for `repaint` and `lego` modes (lego uses region-constrained generation).
-`-1` on start means 0s (beginning), `-1` on end means source duration (end).
-Ignored for all other task types. Error if end <= start after resolve.
+Region boundaries for `repaint` and `lego` modes (lego uses region-constrained
+generation). Default start is 0 (source beginning). Default end is `-1`
+(sentinel: source duration). Negative start outpaints before the source
+(silence padding prepended). End beyond source duration outpaints after (silence
+padding appended). The source audio is padded before VAE encoding and
+coordinates are shifted into the padded reference frame. Ignored for all other
+task types. Error if end <= start after adjustment.
 
 **`task_type`** (string, default `""` = `text2music`)
 Controls the generation mode. This field is the single source of truth for
@@ -546,8 +576,10 @@ Values: `text2music`, `cover`, `cover-nofsq`, `repaint`, `lego`, `extract`, `com
   clean 25Hz VAE latents and stays close to the original. Requires `--src-audio`.
   Pass `--ref-audio` = `--src-audio` for best results.
 - `repaint`: regenerate a time region of the source audio. Requires `--src-audio`
-  and `repainting_start/end`. Step injection keeps frames outside the zone anchored
-  to the source; a waveform splice restores them to the original PCM post-decode.
+  and `repainting_start/end`. Negative start or end beyond source duration
+  outpaints with silence padding. Step injection keeps frames outside the zone
+  anchored to the source; a waveform splice restores them to the original PCM
+  post-decode.
 - `lego`: generate a new instrument track in context of a backing track. Requires
   `--src-audio` and `track`. Base model only. Output is the generated track
   (behavior analogous to stem generation; the output mix vs isolated stem is
