@@ -576,8 +576,10 @@ AceLm * ace_lm_load(const AceLmParams * params) {
         delete ctx;
         return NULL;
     }
-    ctx->model.use_flash_attn = params->use_fa;
-    ctx->model.clamp_fp16     = params->clamp_fp16;
+    if (!params->use_fa) {
+        ctx->model.use_flash_attn = false;
+    }
+    ctx->model.clamp_fp16 = params->clamp_fp16;
 
     // Pre-extract partial LM head for phase2 (audio code tokens only).
     // Uses a contiguous GPU tensor instead of ggml_view_2d on quantized weights.
@@ -588,11 +590,9 @@ AceLm * ace_lm_load(const AceLmParams * params) {
         ctx->fsm.init(ctx->bpe, ctx->model.cfg.vocab_size);
     }
 
-    fprintf(stderr, "[Ace-LM] Loaded: vocab=%d, max_seq=%d, max_batch=%d, kv_sets=%d\n", ctx->model.cfg.vocab_size,
-            params->max_seq, params->max_batch, n_kv_sets);
-    if (!params->use_fa) {
-        fprintf(stderr, "[Ace-LM] Flash attention disabled\n");
-    }
+    fprintf(stderr, "[Ace-LM] Loaded: vocab=%d, max_seq=%d, max_batch=%d, kv_sets=%d, fa=%s\n",
+            ctx->model.cfg.vocab_size, params->max_seq, params->max_batch, n_kv_sets,
+            ctx->model.use_flash_attn ? "yes" : "no");
     if (!params->use_fsm) {
         fprintf(stderr, "[Ace-LM] FSM constrained decoding disabled\n");
     }

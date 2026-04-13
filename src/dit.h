@@ -434,7 +434,7 @@ static void dit_ggml_init_backend(DiTGGML * m) {
     m->sched          = backend_sched_new(bp, 8192);
     // flash_attn_ext accumulates in F16 on CPU, causing audible drift over
     // 24 layers x 8 steps. Use F32 manual attention on CPU instead.
-    m->use_flash_attn = (bp.backend != bp.cpu_backend);
+    m->use_flash_attn = bp.has_gpu;
 }
 
 static void dit_ggml_free(DiTGGML * m) {

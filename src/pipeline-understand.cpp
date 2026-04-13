@@ -58,9 +58,8 @@ struct AceUnderstand {
     VAEEncoder vae_enc;
 
     // FSQ tokenizer (for audio input mode)
-    bool           have_fsq;
-    TokGGML        fsq;
-    ggml_backend_t fsq_backend;
+    bool    have_fsq;
+    TokGGML fsq;
 
     // silence latent from DiT GGUF (needed for FSQ tokenizer padding)
     std::vector<float> silence;
@@ -106,7 +105,6 @@ AceUnderstand * ace_understand_load(const AceUnderstandParams * params) {
     ctx->owns_lm      = false;
     ctx->model        = nullptr;
     ctx->bpe          = nullptr;
-    ctx->fsq_backend  = nullptr;
 
     // Load VAE encoder (for audio encoding)
     if (params->vae_path) {
@@ -137,17 +135,10 @@ AceUnderstand * ace_understand_load(const AceUnderstandParams * params) {
         memcpy(ctx->silence.data(), sl, 15000 * 64 * sizeof(float));
         gf_close(&gf);
 
-        // FSQ tokenizer (CPU backend, weights in DiT GGUF)
-        ctx->fsq_backend = cpu_backend_new(backend_cpu_n_threads());
-        if (!ctx->fsq_backend) {
-            fprintf(stderr, "[Understand-Load] FATAL: Tok CPU backend init failed\n");
-            delete ctx;
-            return NULL;
-        }
+        // FSQ tokenizer (weights in DiT GGUF)
         ctx->fsq = {};
-        if (!tok_ggml_load(&ctx->fsq, params->dit_path, ctx->fsq_backend, ctx->fsq_backend)) {
+        if (!tok_ggml_load(&ctx->fsq, params->dit_path)) {
             fprintf(stderr, "[Understand-Load] FATAL: Tok load failed\n");
-            ggml_backend_free(ctx->fsq_backend);
             delete ctx;
             return NULL;
         }
@@ -181,7 +172,9 @@ AceUnderstand * ace_understand_load(const AceUnderstandParams * params) {
             delete ctx;
             return NULL;
         }
-        ctx->model_storage.use_flash_attn = params->use_fa;
+        if (!params->use_fa) {
+            ctx->model_storage.use_flash_attn = false;
+        }
         fprintf(stderr, "[Understand-Load] LM: %.0fms\n", t_load.ms());
 
         ctx->model   = &ctx->model_storage;
@@ -196,7 +189,8 @@ AceUnderstand * ace_understand_load(const AceUnderstandParams * params) {
     }
 
     ctx->load_ms = t_load.ms();
-    fprintf(stderr, "[Understand-Load] Loaded in %.0fms\n", ctx->load_ms);
+    fprintf(stderr, "[Understand-Load] Loaded in %.0fms, fa=%s\n", ctx->load_ms,
+            (ctx->model && ctx->model->use_flash_attn) ? "yes" : "no");
     return ctx;
 }
 
@@ -444,7 +438,6 @@ void ace_understand_free(AceUnderstand * ctx) {
     }
     if (ctx->have_fsq) {
         tok_ggml_free(&ctx->fsq);
-        ggml_backend_free(ctx->fsq_backend);
     }
     if (ctx->have_vae_enc) {
         vae_enc_free(&ctx->vae_enc);

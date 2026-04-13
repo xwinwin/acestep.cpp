@@ -63,10 +63,11 @@ static int fsq_encode_index(const float * raw_vals) {
 }
 
 // Load tokenizer weights from DiT GGUF
-static bool tok_ggml_load(TokGGML * m, const char * gguf_path, ggml_backend_t backend, ggml_backend_t cpu_backend) {
-    m->backend        = backend;
-    m->cpu_backend    = cpu_backend;
-    m->use_flash_attn = true;
+static bool tok_ggml_load(TokGGML * m, const char * gguf_path) {
+    BackendPair bp    = backend_init("Tokenizer");
+    m->backend        = bp.backend;
+    m->cpu_backend    = bp.cpu_backend;
+    m->use_flash_attn = bp.has_gpu;
 
     // Same Qwen3 config as detokenizer (2 layers, H=2048)
     m->cfg.n_layers          = 2;
@@ -103,15 +104,14 @@ static bool tok_ggml_load(TokGGML * m, const char * gguf_path, ggml_backend_t ba
         qwen3_load_layer(&m->wctx, gf, &m->layers[i], prefix);
     }
 
-    if (!wctx_alloc(&m->wctx, backend)) {
+    if (!wctx_alloc(&m->wctx, m->backend)) {
         gf_close(&gf);
         return false;
     }
     gf_close(&gf);
 
     // Scheduler
-    BackendPair bp_tok = { backend, cpu_backend };
-    m->sched           = backend_sched_new(bp_tok, 4096);
+    m->sched = backend_sched_new(bp, 4096);
     if (!m->sched) {
         fprintf(stderr, "[Tok] FATAL: failed to create scheduler\n");
         return false;
@@ -239,5 +239,6 @@ static void tok_ggml_free(TokGGML * m) {
         ggml_backend_sched_free(m->sched);
     }
     wctx_free(&m->wctx);
+    backend_release(m->backend, m->cpu_backend);
     *m = {};
 }

@@ -308,7 +308,7 @@ static void qwen3_init_backend(Qwen3GGML * m) {
     m->backend        = bp.backend;
     m->cpu_backend    = bp.cpu_backend;
     m->sched          = backend_sched_new(bp, 4096);
-    m->use_flash_attn = true;
+    m->use_flash_attn = bp.has_gpu;
 }
 
 // Load standalone text encoder (Qwen3-Embedding) from GGUF

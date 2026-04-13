@@ -170,7 +170,7 @@ AceSynth * ace_synth_load(const AceSynthParams * params) {
     // Detokenizer (for audio_codes mode, weights in DiT GGUF)
     timer.reset();
     ctx->detok = {};
-    if (detok_ggml_load(&ctx->detok, params->dit_path, ctx->dit.backend, ctx->dit.cpu_backend)) {
+    if (detok_ggml_load(&ctx->detok, params->dit_path)) {
         if (!params->use_fa) {
             ctx->detok.use_flash_attn = false;
         }
@@ -181,15 +181,16 @@ AceSynth * ace_synth_load(const AceSynthParams * params) {
     // Tokenizer (for FSQ roundtrip in cover mode, weights in DiT GGUF)
     timer.reset();
     ctx->tok = {};
-    if (tok_ggml_load(&ctx->tok, params->dit_path, ctx->dit.backend, ctx->dit.cpu_backend)) {
+    if (tok_ggml_load(&ctx->tok, params->dit_path)) {
+        if (!params->use_fa) {
+            ctx->tok.use_flash_attn = false;
+        }
         ctx->have_tok = true;
         fprintf(stderr, "[Synth-Load] Tokenizer: %.1f ms\n", timer.ms());
     }
 
-    fprintf(stderr, "[Ace-Synth] All models loaded, turbo=%s\n", ctx->is_turbo ? "yes" : "no");
-    if (!params->use_fa) {
-        fprintf(stderr, "[Ace-Synth] flash attention disabled\n");
-    }
+    fprintf(stderr, "[Ace-Synth] All models loaded, turbo=%s, fa=%s\n", ctx->is_turbo ? "yes" : "no",
+            ctx->dit.use_flash_attn ? "yes" : "no");
     if (params->clamp_fp16) {
         fprintf(stderr, "[Ace-Synth] FP16 clamp enabled\n");
     }
