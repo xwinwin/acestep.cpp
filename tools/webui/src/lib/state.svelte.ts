@@ -8,6 +8,7 @@ interface Saved {
 	format: string;
 	dark: boolean;
 	logsOpen: boolean;
+	lang: string;
 	request: AceRequest;
 }
 
@@ -22,6 +23,7 @@ function load(): Saved {
 				format: parsed.format === 'wav' ? 'wav' : 'mp3',
 				dark: parsed.dark ?? true,
 				logsOpen: parsed.logsOpen ?? true,
+				lang: parsed.lang || 'en',
 				request: parsed.request || { caption: '' }
 			};
 		}
@@ -34,6 +36,7 @@ function load(): Saved {
 		format: 'mp3',
 		dark: false,
 		logsOpen: true,
+		lang: 'en',
 		request: { caption: '' }
 	};
 }
@@ -56,7 +59,8 @@ export const app = $state({
 	refSongId: null as number | null,
 	srcSongId: null as number | null,
 	srcRangeStart: -1,
-	srcRangeEnd: -1
+	srcRangeEnd: -1,
+	lang: saved.lang || 'en'
 });
 
 let toastTimer = 0;
@@ -89,6 +93,7 @@ $effect.root(() => {
 			format: app.format,
 			dark: app.dark,
 			logsOpen: app.logsOpen,
+			lang: app.lang,
 			request: app.request
 		};
 		localStorage.setItem(STORAGE_KEY, JSON.stringify(data));

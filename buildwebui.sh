@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 cd tools/webui
 rm -rf node_modules

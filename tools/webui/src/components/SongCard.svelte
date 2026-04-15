@@ -4,6 +4,7 @@
 	import { deleteSong } from '../lib/db.js';
 	import { understandSubmit, pollJob, jobResultJson } from '../lib/api.js';
 	import { saveJob, clearJob } from '../lib/db.js';
+	import { t } from '../lib/i18n.svelte.js';
 	import type { Song } from '../lib/types.js';
 	import Waveform from './Waveform.svelte';
 
@@ -130,7 +131,7 @@
 
 <div class="card">
 	<div class="card-header">
-		<button class="icon-btn" onclick={toggle} title={playing ? 'Stop' : 'Play'}>
+		<button class="icon-btn" onclick={toggle} title={playing ? t('buttonStop') : t('buttonPlay')}>
 			{#if playing}
 				<Square size={14} />
 			{:else}
@@ -139,12 +140,14 @@
 		</button>
 		<span class="card-name">{song.name}</span>
 		<div class="card-actions">
-			<button class="icon-btn" onclick={downloadAudio} title="Download track"
-				><Download size={14} /> Down</button
-			>
-			<button class="icon-btn" onclick={remove} title="Delete track"
-				><Trash2 size={14} /> Del</button
-			>
+			<button class="icon-btn" onclick={downloadAudio} title={t('buttonDownload')}>
+				<Download size={14} />
+				{t('down')}
+			</button>
+			<button class="icon-btn" onclick={remove} title={t('buttonDelete')}>
+				<Trash2 size={14} />
+				{t('delete')}
+			</button>
 		</div>
 	</div>
 	<Waveform
@@ -160,28 +163,34 @@
 		<span class="format-badge">{song.format.toUpperCase()}</span>
 		<span class="timecode">{fmtPos(time)} / {fmtDur(dur)}</span>
 		<div class="card-actions">
-			<button class="icon-btn" onclick={load} title="Edit prompt"><Pencil size={14} /> Edit</button>
-			<button class="icon-btn" onclick={scan} disabled={scanning} title="Analyze audio"
-				><Ear size={14} /> Scan</button
-			>
-			<label class="icon-btn"
-				><input
+			<button class="icon-btn" onclick={load} title={t('tooltipEdit')}>
+				<Pencil size={14} />
+				{t('buttonEdit')}
+			</button>
+			<button class="icon-btn" onclick={scan} disabled={scanning} title={t('tooltipScan')}>
+				<Ear size={14} />
+				{t('buttonScan')}
+			</button>
+			<label class="icon-btn">
+				<input
 					type="checkbox"
 					class="ref-check"
 					checked={isSrc}
 					onchange={toggleSrc}
-					title="Source audio"
-				/> Src</label
-			>
-			<label class="icon-btn"
-				><input
+					title={t('tooltipSrcAudio')}
+				/>
+				{t('srcAudio')}
+			</label>
+			<label class="icon-btn">
+				<input
 					type="checkbox"
 					class="ref-check"
 					checked={isRef}
 					onchange={toggleRef}
-					title="Timbre reference"
-				/> Ref</label
-			>
+					title={t('tooltipRefAudio')}
+				/>
+				{t('refAudio')}
+			</label>
 		</div>
 	</div>
 </div>

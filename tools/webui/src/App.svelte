@@ -1,9 +1,10 @@
 <script lang="ts">
-	import { Volume2 } from '@lucide/svelte';
+	import { Volume2, Languages } from '@lucide/svelte';
 	import { app } from './lib/state.svelte.js';
 	import { props } from './lib/api.js';
 	import { getAllSongs } from './lib/db.js';
 	import { PROPS_POLL_MS } from './lib/config.js';
+	import { toggleLang, t } from './lib/i18n.svelte.js';
 	import RequestForm from './components/RequestForm.svelte';
 	import SongList from './components/SongList.svelte';
 	import Toast from './components/Toast.svelte';
@@ -44,8 +45,13 @@
 		<span class="header-label">acestep.cpp</span>
 		<span class="header-version">{__ACE_VERSION__}</span>
 		<div class="spacer"></div>
+		<button class="lang-toggle" onclick={toggleLang} title={t('buttonToggleLang')}>
+			<Languages size={14} />
+			<span>{app.lang === 'en' ? t('langChinese') : t('langEnglish')}</span>
+		</button>
 		<label class="dark-toggle">
-			<input type="checkbox" bind:checked={app.dark} /> Dark
+			<input type="checkbox" bind:checked={app.dark} />
+			{t('dark')}
 		</label>
 		<div class="volume">
 			<Volume2 size={14} />
@@ -143,16 +149,24 @@
 		align-items: center;
 		gap: 0.3rem;
 		font-size: 0.75rem;
-		color: var(--fg-dim);
+		color: var(--fg);
 		cursor: pointer;
 	}
-	.dark-toggle {
+	.lang-toggle {
 		display: flex;
 		align-items: center;
 		gap: 0.3rem;
 		font-size: 0.75rem;
 		color: var(--fg);
 		cursor: pointer;
+		background: var(--bg-btn);
+		border: none;
+		padding: 0.3rem 0.5rem;
+		border-radius: 4px;
+		transition: background 0.2s;
+	}
+	.lang-toggle:hover {
+		background: var(--bg-btn-hover);
 	}
 	.volume {
 		display: flex;

@@ -2,6 +2,7 @@
 	import { app } from '../lib/state.svelte.js';
 	import { SSE_RECONNECT_MS, LOG_MAX_LINES } from '../lib/config.js';
 	import { ChevronDown, ChevronRight } from '@lucide/svelte';
+	import { t } from '../lib/i18n.svelte.js';
 
 	let lines = $state<string[]>([]);
 
@@ -39,7 +40,7 @@
 		{:else}
 			<ChevronRight size={14} />
 		{/if}
-		<span class="card-label">Server logs</span>
+		<span class="card-label">{t('serverLogs')}</span>
 	</button>
 	{#if app.logsOpen}
 		<pre class="log-body">{lines.join('\n')}</pre>

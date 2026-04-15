@@ -24,6 +24,7 @@
 		TASK_COMPLETE,
 		TRACK_NAMES
 	} from '../lib/config.js';
+	import { t } from '../lib/i18n.svelte.js';
 	import type { AceRequest, Song } from '../lib/types.js';
 
 	let busyLm = $state(false);
@@ -582,36 +583,34 @@
 		hidden
 	/>
 	<div class="toolbar">
-		<button type="button" onclick={importJson} title="Open JSON prompt, MP3 or WAV"
-			><FolderOpen size={14} /> Open</button
-		>
-		<button type="button" onclick={exportJson} title="Save JSON prompt"
-			><Download size={14} /> Save</button
-		>
-		<button type="button" onclick={reset} title="Reset prompt"><RotateCcw size={14} /> Reset</button
-		>
+		<button type="button" onclick={importJson} title={t('buttonUpload')}>
+			<FolderOpen size={14} />
+			{t('buttonSelect')}
+		</button>
+		<button type="button" onclick={exportJson} title={t('buttonDownload')}>
+			<Download size={14} />
+			{t('buttonDownload')}
+		</button>
+		<button type="button" onclick={reset} title={t('buttonClear')}>
+			<RotateCcw size={14} />
+			{t('buttonClear')}
+		</button>
 	</div>
 
 	<details>
-		<summary>Models</summary>
+		<summary>{t('model')}</summary>
 		<div class="details-body">
 			<div class="model-row">
-				<span class="model-label">LM</span>
-				<select
-					bind:value={app.request.lm_model}
-					title="Language Model for Inspire, Format and Compose. Scanned from --models directory at startup."
-				>
+				<span class="model-label">{t('lm')}</span>
+				<select bind:value={app.request.lm_model} title={t('tooltipLMModel')}>
 					{#each lmModels as name}
 						<option value={name}>{name}</option>
 					{/each}
 				</select>
 			</div>
 			<div class="model-row">
-				<span class="model-label">DiT</span>
-				<select
-					bind:value={app.request.synth_model}
-					title="Diffusion Transformer for Synthesize. Scanned from --models directory at startup."
-				>
+				<span class="model-label">{t('dit')}</span>
+				<select bind:value={app.request.synth_model} title={t('tooltipDiTModel')}>
 					{#each ditModels as name}
 						<option value={name}>{name}</option>
 					{/each}
@@ -619,11 +618,8 @@
 			</div>
 			<div class="model-row">
 				<span class="model-label">LoRA</span>
-				<select
-					bind:value={app.request.lora}
-					title="LoRA adapter merged into DiT at load time. Must match the exact DiT it was trained on. Scanned from --loras directory. ComfyUI format: single .safetensors file. PEFT format: directory with adapter_model.safetensors and adapter_config.json."
-				>
-					<option value="">Disabled</option>
+				<select bind:value={app.request.lora} title={t('tooltipLora')}>
+					<option value="">{t('disabled')}</option>
 					{#if loraStale}
 						<option value={app.request.lora} disabled>{app.request.lora}</option>
 					{/if}
@@ -636,70 +632,63 @@
 					class="batch-input"
 					placeholder="1.0"
 					bind:value={app.request.lora_scale}
-					title="LoRA scale factor. Lower if you hear structured noise or artifacts. Raise for stronger effect."
+					title={t('tooltipLoraScale')}
 				/>
 			</div>
 		</div>
 	</details>
 
-	<div class="section-title">Name</div>
-	<input type="text" bind:value={app.name} placeholder="Untitled" />
+	<div class="section-title">{t('outputName')}</div>
+	<input type="text" bind:value={app.name} placeholder={t('placeholderUntitled')} />
 
-	<div class="section-title">Caption</div>
-	<textarea
-		rows="8"
-		placeholder="Upbeat pop rock with driving guitars... (the only required field, enriched by the LM unless all prompt fields are filled.)"
-		bind:value={app.request.caption}
+	<div class="section-title">{t('caption')}</div>
+	<textarea rows="8" placeholder={t('captionPlaceholder')} bind:value={app.request.caption}
 	></textarea>
 
 	<div class="section-title lyrics-header">
-		Lyrics
-		<label class="instrumental-toggle" title="Set lyrics to [Instrumental] and language to unknown">
-			<input type="checkbox" checked={instrumental} onchange={toggleInstrumental} /> Instrumental
+		{t('lyrics')}
+		<label class="instrumental-toggle" title={t('tooltipInstrumental')}>
+			<input type="checkbox" checked={instrumental} onchange={toggleInstrumental} />
+			{t('instrumental')}
 		</label>
 	</div>
-	<textarea
-		rows="8"
-		placeholder="Write your own lyrics or leave empty to let the LM create them..."
-		bind:value={app.request.lyrics}
+	<textarea rows="8" placeholder={t('placeholderLyrics')} bind:value={app.request.lyrics}
 	></textarea>
 
 	<div class="section-title metadata-header">
-		Metadata
+		{t('metadata')}
 		<span
 			class="clear-link"
 			role="button"
 			tabindex="0"
-			title="Clear all metadata fields (LM will guess them)"
+			title={t('tooltipClear')}
 			onclick={clearMetadata}
-			onkeydown={(e) => e.key === 'Enter' && clearMetadata()}>Clear</span
+			onkeydown={(e) => e.key === 'Enter' && clearMetadata()}>{t('clear')}</span
 		>
 	</div>
 	<div class="meta-grid">
 		<label
-			>Language <input
+			>{t('vocalLanguage')}
+			<input
 				type="text"
 				placeholder={ph(d?.vocal_language)}
 				bind:value={app.request.vocal_language}
 			/></label
 		>
-		<label>BPM <input type="text" placeholder={ph(d?.bpm)} bind:value={app.request.bpm} /></label>
 		<label
-			>Duration <input
-				type="text"
-				placeholder={ph(d?.duration)}
-				bind:value={app.request.duration}
-			/></label
+			>{t('bpm')} <input type="text" placeholder={ph(d?.bpm)} bind:value={app.request.bpm} /></label
 		>
 		<label
-			>Key <input
-				type="text"
-				placeholder={ph(d?.keyscale)}
-				bind:value={app.request.keyscale}
-			/></label
+			>{t('duration')}
+			<input type="text" placeholder={ph(d?.duration)} bind:value={app.request.duration} /></label
 		>
 		<label
-			>Time sig <input
+			>{t('key')}
+			<input type="text" placeholder={ph(d?.keyscale)} bind:value={app.request.keyscale} /></label
+		>
+		<label
+			>{t('timeSig')}
+			<input
 				type="text"
 				placeholder={ph(d?.timesignature)}
 				bind:value={app.request.timesignature}
@@ -708,56 +697,48 @@
 	</div>
 
 	<div class="lm-row">
-		<button
-			type="button"
-			disabled={busy}
-			onclick={dice}
-			title="Pick a random example from ACE-Step sample prompts. Use Inspire next to complete missing fields."
-			>Dice</button
+		<button type="button" disabled={busy} onclick={dice} title={t('tooltipInspire')}
+			>{t('dice')}</button
 		>
-		<button
-			type="button"
-			disabled={busy}
-			onclick={inspire}
-			title="Step 1: LM inference to generate metadata and lyrics from your caption. Next: Compose."
-			>Inspire</button
+		<button type="button" disabled={busy} onclick={inspire} title={t('tooltipCompose')}
+			>{t('inspire')}</button
 		>
-		<button
-			type="button"
-			disabled={busy}
-			onclick={format}
-			title="Step 1: LM inference to format existing lyrics for better generation quality. Next: Compose."
-			>Format</button
+		<button type="button" disabled={busy} onclick={format} title={t('tooltipFormat')}
+			>{t('format')}</button
 		>
 	</div>
 
 	<details>
-		<summary>Advanced LM</summary>
+		<summary>{t('advancedLm')}</summary>
 		<div class="details-body">
 			<div class="meta-grid">
 				<label
-					>Temperature <input
+					>{t('temperature')}
+					<input
 						type="text"
 						placeholder={ph(d?.lm_temperature)}
 						bind:value={app.request.lm_temperature}
 					/></label
 				>
 				<label
-					>CFG scale <input
+					>{t('cfgScale')}
+					<input
 						type="text"
 						placeholder={ph(d?.lm_cfg_scale)}
 						bind:value={app.request.lm_cfg_scale}
 					/></label
 				>
 				<label
-					>Top P <input
+					>{t('topP')}
+					<input
 						type="text"
 						placeholder={ph(d?.lm_top_p)}
 						bind:value={app.request.lm_top_p}
 					/></label
 				>
 				<label
-					>Top K <input
+					>{t('topK')}
+					<input
 						type="text"
 						placeholder={ph(d?.lm_top_k)}
 						bind:value={app.request.lm_top_k}
@@ -765,18 +746,18 @@
 				>
 			</div>
 			<label
-				>Negative prompt
+				>{t('negativePrompt')}
 				<textarea
 					rows="4"
-					placeholder="Styles or instruments to steer away from, e.g. saxophone, autotune, screaming, low quality..."
+					placeholder={t('placeholderNegative')}
 					bind:value={app.request.lm_negative_prompt}
 				></textarea>
 			</label>
 			<label
-				>Audio codes
+				>{t('audioCodes')}
 				<textarea
 					rows="4"
-					placeholder="Filled by Compose. Do not edit unless you know what you are doing."
+					placeholder={t('placeholderAudioCodes')}
 					bind:value={app.request.audio_codes}
 				></textarea>
 			</label>
@@ -784,23 +765,23 @@
 	</details>
 
 	<div class="model-row">
-		<span class="model-label">Batch</span>
+		<span class="model-label">{t('batch')}</span>
 		<input
 			type="number"
 			class="batch-input"
 			min="1"
 			max={app.props?.cli?.max_batch || 9}
 			bind:value={app.request.lm_batch_size}
-			title="Number of LM variations per Compose. Server must be started with --max-batch N (default 1). Higher values use more VRAM for the KV cache."
+			title={t('tooltipBatch')}
 		/>
 		<span class="spacer"></span>
-		<span class="row-label">Pending</span>
+		<span class="row-label">{t('pending')}</span>
 		<div class="pending-nav">
 			<button
 				type="button"
 				class="nav-btn"
 				onclick={() => switchPending(-1)}
-				title="Previous pending variation">&lt;</button
+				title={t('tooltipPrevious')}>&lt;</button
 			>
 			<span class="nav-label"
 				>{app.pendingRequests.length > 0 ? app.pendingIndex + 1 : 0} / {app.pendingRequests
@@ -810,49 +791,42 @@
 				type="button"
 				class="nav-btn"
 				onclick={() => switchPending(1)}
-				title="Next pending variation">&gt;</button
+				title={t('tooltipNext')}>&gt;</button
 			>
 		</div>
 	</div>
 
 	<div class="action-row">
-		<button
-			type="button"
-			disabled={busy}
-			onclick={compose}
-			title="Step 2: LM inference to generate audio codes that drive the flow matching. Next: Synthesize."
-			>Compose</button
+		<button type="button" disabled={busy} onclick={compose} title={t('tooltipSynthesize')}
+			>{t('compose')}</button
 		>
-		<button
-			type="button"
-			disabled={!busyLm}
-			onclick={cancelPipeline}
-			title="Cancel the active LM job">Cancel</button
+		<button type="button" disabled={!busyLm} onclick={cancelPipeline} title={t('cancel')}
+			>{t('cancel')}</button
 		>
 	</div>
 
 	<details open>
-		<summary>Task</summary>
+		<summary>{t('task')}</summary>
 		<div class="details-body">
 			<div class="model-row">
-				<span class="model-label">Type</span>
+				<span class="model-label">{t('type')}</span>
 				<select
 					value={taskType}
 					onchange={(e) => {
 						app.request.task_type = e.currentTarget.value;
 					}}
 				>
-					<option value="">text2music</option>
-					<option value={TASK_COVER}>cover</option>
-					<option value={TASK_COVER_NOFSQ}>cover-nofsq</option>
-					<option value={TASK_REPAINT}>repaint</option>
-					<option value={TASK_LEGO}>lego</option>
-					<option value={TASK_EXTRACT}>extract</option>
-					<option value={TASK_COMPLETE}>complete</option>
+					<option value="">{t('text2music')}</option>
+					<option value={TASK_COVER}>{t('taskCover')}</option>
+					<option value={TASK_COVER_NOFSQ}>{t('taskCoverNoFSQ')}</option>
+					<option value={TASK_REPAINT}>{t('taskRepaint')}</option>
+					<option value={TASK_LEGO}>{t('taskLego')}</option>
+					<option value={TASK_EXTRACT}>{t('taskExtract')}</option>
+					<option value={TASK_COMPLETE}>{t('taskComplete')}</option>
 				</select>
 			</div>
 			<div class="model-row track-row">
-				<span class="model-label">Track</span>
+				<span class="model-label">{t('track')}</span>
 				<div class="track-grid">
 					{#each TRACK_NAMES as name}
 						<button
@@ -869,128 +843,127 @@
 	</details>
 
 	<details open class="has-clear">
-		<summary>Flow matching parameters</summary>
+		<summary>{t('flowMatching')}</summary>
 		<span
 			class="clear-link details-clear"
 			role="button"
 			tabindex="0"
-			title="Reset all flow matching parameters to auto-detect defaults"
+			title={t('tooltipFlowReset')}
 			onclick={clearFlowMatching}
-			onkeydown={(e) => e.key === 'Enter' && clearFlowMatching()}>Clear</span
+			onkeydown={(e) => e.key === 'Enter' && clearFlowMatching()}>{t('clear')}</span
 		>
 		<div class="details-body">
 			<div class="meta-grid">
 				<label
-					>Steps <input
+					>{t('steps')}
+					<input
 						type="text"
 						placeholder={ph(dp?.inference_steps)}
 						bind:value={app.request.inference_steps}
 					/></label
 				>
 				<label
-					>Cover strength <input
+					>{t('coverNoise')}
+					<input
 						type="text"
 						placeholder={ph(d?.audio_cover_strength)}
 						bind:value={app.request.audio_cover_strength}
 					/></label
 				>
 				<label
-					>Cover noise <input
+					>{t('coverNoise')}
+					<input
 						type="text"
 						placeholder={ph(d?.cover_noise_strength)}
 						bind:value={app.request.cover_noise_strength}
 					/></label
 				>
 				<label
-					>Repaint strength <input
+					>{t('repaintStrength')}
+					<input
 						type="text"
 						placeholder={ph(d?.repaint_strength)}
 						bind:value={app.request.repaint_strength}
 					/></label
 				>
 				<label
-					>CFG scale <input
+					>{t('cfgScale')}
+					<input
 						type="text"
 						placeholder={ph(dp?.guidance_scale)}
 						bind:value={app.request.guidance_scale}
 					/></label
 				>
 				<label
-					>Shift <input
-						type="text"
-						placeholder={ph(dp?.shift)}
-						bind:value={app.request.shift}
-					/></label
+					>{t('shift')}
+					<input type="text" placeholder={ph(dp?.shift)} bind:value={app.request.shift} /></label
 				>
 				<label
-					>Method <select
+					>{t('method')}
+					<select
 						value={app.request.infer_method || ''}
 						onchange={(e) => {
 							app.request.infer_method = e.currentTarget.value;
 						}}
 					>
-						<option value="">ODE Euler</option>
-						<option value="sde">SDE Stochastic</option>
+						<option value="">{t('odeEuler')}</option>
+						<option value="sde">{t('sdeStochastic')}</option>
 					</select></label
 				>
 				<label
-					>Seed <input type="text" placeholder={ph(d?.seed)} bind:value={app.request.seed} /></label
+					>{t('seed')}
+					<input type="text" placeholder={ph(d?.seed)} bind:value={app.request.seed} /></label
 				>
 			</div>
 		</div>
 	</details>
 
 	<div class="model-row">
-		<span class="model-label">Batch</span>
+		<span class="model-label">{t('batch')}</span>
 		<input
 			type="number"
 			class="batch-input"
 			min="1"
 			max="9"
 			bind:value={app.request.synth_batch_size}
-			title="Number of DiT variations per request. Each uses a consecutive seed."
+			title={t('tooltipFlowBatch')}
 		/>
 		<span class="spacer"></span>
-		<span class="row-label">Peak clip</span>
+		<span class="row-label">{t('peakClip')}</span>
 		<input
 			type="number"
 			class="peak-clip-input"
 			min="0"
 			max="999"
 			bind:value={app.request.peak_clip}
-			title="Percentile peak normalization to 0 dB. 0 = no clipping (100th percentile). 10 = default (99.999%, clips ~58 samples / 1.2 ms). 999 = aggressive (99.9%, clips ~5760 samples / 120 ms)."
+			title={t('tooltipFlowPeakClip')}
 		/>
 		<label class="radio-label">
-			<input type="radio" name="format" value="mp3" bind:group={app.format} /> MP3
+			<input type="radio" name="format" value="mp3" bind:group={app.format} />
+			{t('formatMp3')}
 		</label>
 		<label class="radio-label">
-			<input type="radio" name="format" value="wav" bind:group={app.format} /> WAV
+			<input type="radio" name="format" value="wav" bind:group={app.format} />
+			{t('formatWav')}
 		</label>
 	</div>
 
 	<div class="model-row cond-row">
-		<span class="model-label">Cond</span>
+		<span class="model-label">{t('cond')}</span>
 		<div class="track-grid">
-			<span class="dit-ind" class:on={hasCodes}>LM codes</span>
-			<span class="dit-ind" class:on={hasSrc}>Src audio</span>
-			<span class="dit-ind" class:on={hasRange}>Range</span>
-			<span class="dit-ind" class:on={hasRef}>Timbre ref</span>
+			<span class="dit-ind" class:on={hasCodes}>{t('lmCodes')}</span>
+			<span class="dit-ind" class:on={hasSrc}>{t('srcAudio')}</span>
+			<span class="dit-ind" class:on={hasRange}>{t('range')}</span>
+			<span class="dit-ind" class:on={hasRef}>{t('timbreRef')}</span>
 		</div>
 	</div>
 
 	<div class="action-row">
-		<button
-			type="button"
-			disabled={busy}
-			onclick={synthesize}
-			title="Step 3: DiT flow matching + VAE decoding to synthesize audio from codes. No green indicators above (LM codes, Src audio, Timbre ref)? The DiT will hallucinate freely from your prompt: very creative, but unpredictable."
-			>Synthesize</button
+		<button type="button" disabled={busy} onclick={synthesize} title={t('tooltipSynthesizeStep')}
+			>{t('synthesize')}</button
 		>
-		<button
-			type="button"
-			disabled={!busySynth}
-			onclick={cancelPipeline}
-			title="Cancel the active synth job">Cancel</button
+		<button type="button" disabled={!busySynth} onclick={cancelPipeline} title={t('cancel')}
+			>{t('cancel')}</button
 		>
 	</div>
 </form>

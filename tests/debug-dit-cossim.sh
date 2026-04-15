@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 for backend in CUDA0 Vulkan0; do
     for quant in BF16 Q8_0 Q6_K Q5_K_M Q4_K_M; do

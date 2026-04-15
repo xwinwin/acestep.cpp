@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 cp ../examples/simple.json .
 cp ../examples/partial.json .
