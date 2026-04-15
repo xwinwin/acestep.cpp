@@ -17,8 +17,8 @@
 		time = $bindable(0),
 		dur = $bindable(0),
 		selectable = false,
-		rangeStart = $bindable(-1),
-		rangeEnd = $bindable(-1)
+		rangeStart = $bindable(0),
+		rangeEnd = $bindable(0)
 	}: {
 		audio: Blob;
 		playing: boolean;
@@ -93,6 +93,13 @@
 		svelteTick().then(() => {
 			if (peaks.length > 0) draw();
 		});
+	});
+
+	// redraw when range changes from external source (field input)
+	$effect(() => {
+		rangeStart;
+		rangeEnd;
+		if (peaks.length > 0) draw();
 	});
 
 	// play/pause
@@ -199,9 +206,9 @@
 		const progress = dur > 0 ? currentTime() / dur : 0;
 		const mid = ch / 2;
 		const barW = cw / peaks.length;
-		const hasRange = rangeStart >= 0 && rangeEnd > rangeStart && dur > 0;
-		const rA = hasRange ? rangeStart / dur : 0;
-		const rB = hasRange ? rangeEnd / dur : 0;
+		const hasRange = rangeEnd > rangeStart && dur > 0;
+		const rA = hasRange ? Math.max(0, rangeStart / dur) : 0;
+		const rB = hasRange ? Math.min(1, rangeEnd / dur) : 0;
 
 		ctx.clearRect(0, 0, cw, ch);
 
@@ -243,8 +250,8 @@
 			draw();
 			return;
 		}
-		if (rangeEnd > rangeStart && rangeStart >= 0 && t >= rangeEnd) {
-			startPlayback(rangeStart);
+		if (rangeEnd > rangeStart && t >= rangeEnd) {
+			startPlayback(Math.max(0, rangeStart));
 		}
 		time = currentTime();
 		draw();
@@ -283,7 +290,7 @@
 			const pos = xToNorm(e.clientX);
 			const cur = pos * dur;
 			// snap closest edge to mouse, or start new range
-			if (rangeStart >= 0 && rangeEnd > rangeStart && dur > 0) {
+			if (rangeEnd > rangeStart && dur > 0) {
 				const dLo = Math.abs(pos - rangeStart / dur);
 				const dHi = Math.abs(pos - rangeEnd / dur);
 				if (dLo <= dHi) {

@@ -13,8 +13,8 @@
 	let playing = $state(false);
 	let time = $state(0);
 	let dur = $state(0);
-	let rangeStart = $state(-1);
-	let rangeEnd = $state(-1);
+	let rangeStart = $state(0);
+	let rangeEnd = $state(0);
 
 	let isRef = $derived(app.refSongId === song.id);
 	let isSrc = $derived(app.srcSongId === song.id);
@@ -30,20 +30,35 @@
 	function toggleSrc() {
 		if (isSrc) {
 			app.srcSongId = null;
-			app.srcRangeStart = -1;
-			app.srcRangeEnd = -1;
-			rangeStart = -1;
-			rangeEnd = -1;
+			app.srcRangeStart = null;
+			app.srcRangeEnd = null;
+			rangeStart = 0;
+			rangeEnd = 0;
 		} else {
 			app.srcSongId = song.id ?? null;
 		}
 	}
 
-	// sync local range to global when this song is the src
+	// waveform drag to global state
 	$effect(() => {
-		if (isSrc) {
+		if (isSrc && rangeEnd > rangeStart) {
 			app.srcRangeStart = rangeStart;
 			app.srcRangeEnd = rangeEnd;
+		}
+	});
+
+	// global state to waveform visual (field input)
+	$effect(() => {
+		if (isSrc) {
+			const rs = app.srcRangeStart;
+			const re = app.srcRangeEnd;
+			if (rs != null && re != null && re > rs) {
+				rangeStart = rs;
+				rangeEnd = re;
+			} else {
+				rangeStart = 0;
+				rangeEnd = 0;
+			}
 		}
 	});
 

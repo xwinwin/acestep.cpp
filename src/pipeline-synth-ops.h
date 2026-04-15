@@ -38,6 +38,10 @@ struct SynthState {
     std::vector<float> noise_blend_latents;  // clean VAE latents for cover_noise_strength blending
     int                T_cover;
 
+    // outpainting: silence padding for repaint beyond source bounds
+    float              left_pad_sec;  // seconds of silence prepended (coordinate shift)
+    std::vector<float> padded_src;    // interleaved stereo buffer with silence padding
+
     // mode flags
     std::string task;
     bool        is_repaint;
@@ -131,9 +135,6 @@ void ops_build_schedule(SynthState & s);
 // Resolve T (latent frame count) and S (patch count).
 int ops_resolve_T(AceSynth * ctx, SynthState & s);
 
-// Clamp rs/re to source duration. Caller ensures a region task is active.
-int ops_clamp_region(SynthState & s);
-
 // Encode timbre from ref_audio via VAE. Sets s.timbre_feats and s.S_ref_timbre.
 void ops_encode_timbre(AceSynth * ctx, const float * ref_audio, int ref_len, SynthState & s);
 
@@ -154,7 +155,7 @@ void ops_init_noise_and_repaint(AceSynth * ctx, const AceRequest * reqs, int bat
 int ops_dit_generate(AceSynth * ctx, int batch_n, SynthState & s, bool (*cancel)(void *), void * cancel_data);
 
 // VAE decode all batch items + waveform splice for repaint/lego regions.
-// src_audio is the original interleaved PCM used for splice.
+// src_audio is interleaved PCM for splice (padded for outpainting).
 // Returns 0 on success, -1 on error/cancel.
 int ops_vae_decode_and_splice(AceSynth *    ctx,
                               int           batch_n,

@@ -217,12 +217,49 @@ int ace_synth_generate(AceSynth *         ctx,
     }
 
     SynthState s;
-    s.Oc     = ctx->Oc;
-    s.ctx_ch = ctx->ctx_ch;
+    s.Oc           = ctx->Oc;
+    s.ctx_ch       = ctx->ctx_ch;
+    s.left_pad_sec = 0.0f;
     debug_init(&s.dbg, ctx->params.dump_dir);
 
-    // VAE encode source audio
-    if (ops_encode_src(ctx, src_audio, src_len, s) != 0) {
+    // Outpainting: pad src_audio with silence when region coordinates extend
+    // beyond source bounds. Padding happens before VAE encode so T_cover
+    // reflects the padded duration.
+    const float * enc_audio = src_audio;
+    int           enc_len   = src_len;
+    {
+        const std::string & tp = reqs[0].task_type;
+        bool                is_region_task =
+            (tp == TASK_REPAINT) || (tp == TASK_LEGO && reqs[0].repainting_end > reqs[0].repainting_start);
+        if (is_region_task && src_audio && src_len > 0) {
+            float src_dur  = (float) src_len / 48000.0f;
+            float rs_raw   = reqs[0].repainting_start;
+            float re_raw   = reqs[0].repainting_end;
+            float end_time = (re_raw < 0.0f) ? src_dur : re_raw;
+            float lpad     = (rs_raw < 0.0f) ? -rs_raw : 0.0f;
+            float rpad     = (end_time > src_dur) ? end_time - src_dur : 0.0f;
+
+            if (lpad > 0.0f || rpad > 0.0f) {
+                int lpad_s       = (int) (lpad * 48000.0f);
+                int rpad_s       = (int) (rpad * 48000.0f);
+                int padded_total = src_len + lpad_s + rpad_s;
+
+                s.padded_src.resize((size_t) padded_total * 2);
+                memset(s.padded_src.data(), 0, s.padded_src.size() * sizeof(float));
+                memcpy(s.padded_src.data() + (size_t) lpad_s * 2, src_audio, (size_t) src_len * 2 * sizeof(float));
+
+                s.left_pad_sec = lpad;
+                enc_audio      = s.padded_src.data();
+                enc_len        = padded_total;
+
+                fprintf(stderr, "[Outpaint] pad left=%.1fs right=%.1fs total=%.1fs\n", lpad, rpad,
+                        (float) padded_total / 48000.0f);
+            }
+        }
+    }
+
+    // VAE encode source audio (possibly padded for outpainting)
+    if (ops_encode_src(ctx, enc_audio, enc_len, s) != 0) {
         return -1;
     }
 
@@ -230,14 +267,13 @@ int ace_synth_generate(AceSynth *         ctx,
     // Shared params from first request (mode, duration, DiT settings).
     // Per-batch: caption, lyrics, metadata, audio_codes, and seed come from reqs[b].
     // seed must be resolved (non-negative) before calling this function.
-    s.rr         = reqs[0];
+    s.rr                 = reqs[0];
     // task_type is the master. Empty = text2music.
-    s.task       = s.rr.task_type.empty() ? std::string(TASK_TEXT2MUSIC) : s.rr.task_type;
+    s.task               = s.rr.task_type.empty() ? std::string(TASK_TEXT2MUSIC) : s.rr.task_type;
     // only repaint uses region masking. complete uses full src context (Python behavior).
-    s.is_repaint = (s.task == TASK_REPAINT);
+    s.is_repaint         = (s.task == TASK_REPAINT);
     // lego with valid rs/re = region-constrained: generate only in zone, full audio context
-    s.is_lego_region =
-        (s.task == TASK_LEGO && s.rr.repainting_start >= 0.0f && s.rr.repainting_end > s.rr.repainting_start);
+    s.is_lego_region     = (s.task == TASK_LEGO && s.rr.repainting_end > s.rr.repainting_start);
     s.rs                 = s.rr.repainting_start;
     s.re                 = s.rr.repainting_end;
     // use_source_context must be set before ops_resolve_T which uses it for T.
@@ -320,50 +356,20 @@ int ace_synth_generate(AceSynth *         ctx,
         } else if (s.task == TASK_REPAINT) {
             s.use_source_context = true;
             s.instruction_str    = DIT_INSTR_REPAINT;
-            if (ops_clamp_region(s) != 0) {
-                return -1;
-            }
         } else if (s.task == TASK_LEGO) {
             s.use_source_context      = true;
             s.rr.audio_cover_strength = 1.0f;  // all DiT steps hear the backing track
             s.instruction_str         = dit_instr_lego(track_upper);
-            if (!s.rr.track.empty()) {
-                bool valid = false;
-                for (int k = 0; k < TRACK_NAMES_COUNT; k++) {
-                    if (s.rr.track == TRACK_NAMES[k]) {
-                        valid = true;
-                        break;
-                    }
-                }
-                if (!valid) {
-                    fprintf(stderr, "[Lego] WARNING: '%s' is not a standard track name\n", s.rr.track.c_str());
-                }
-            }
+            validate_track_names(s.rr.track, "Lego");
             fprintf(stderr, "[Synth] task=%s\n", s.task.c_str());
             if (ctx->is_turbo) {
                 fprintf(stderr, "[Synth] WARNING: lego requires base model, turbo output incoherent\n");
-            }
-            if (s.is_lego_region) {
-                if (ops_clamp_region(s) != 0) {
-                    return -1;
-                }
             }
         } else if (s.task == TASK_EXTRACT) {
             s.use_source_context      = true;
             s.rr.audio_cover_strength = 1.0f;  // DiT sees the full mix
             s.instruction_str         = dit_instr_extract(track_upper);
-            if (!s.rr.track.empty()) {
-                bool valid = false;
-                for (int k = 0; k < TRACK_NAMES_COUNT; k++) {
-                    if (s.rr.track == TRACK_NAMES[k]) {
-                        valid = true;
-                        break;
-                    }
-                }
-                if (!valid) {
-                    fprintf(stderr, "[Extract] WARNING: '%s' is not a standard track name\n", s.rr.track.c_str());
-                }
-            }
+            validate_track_names(s.rr.track, "Extract");
             fprintf(stderr, "[Synth] task=%s\n", s.task.c_str());
             if (ctx->is_turbo) {
                 fprintf(stderr, "[Synth] WARNING: extract requires base model, turbo output incoherent\n");
@@ -372,18 +378,7 @@ int ace_synth_generate(AceSynth *         ctx,
             s.use_source_context      = true;
             s.rr.audio_cover_strength = 1.0f;  // DiT sees the full isolated stem
             s.instruction_str         = dit_instr_complete(track_upper);
-            if (!s.rr.track.empty()) {
-                bool valid = false;
-                for (int k = 0; k < TRACK_NAMES_COUNT; k++) {
-                    if (s.rr.track == TRACK_NAMES[k]) {
-                        valid = true;
-                        break;
-                    }
-                }
-                if (!valid) {
-                    fprintf(stderr, "[Complete] WARNING: '%s' is not a standard track name\n", s.rr.track.c_str());
-                }
-            }
+            validate_track_names(s.rr.track, "Complete");
             fprintf(stderr, "[Synth] task=%s\n", s.task.c_str());
             if (ctx->is_turbo) {
                 fprintf(stderr, "[Synth] WARNING: complete requires base model, turbo output incoherent\n");
@@ -394,6 +389,25 @@ int ace_synth_generate(AceSynth *         ctx,
             fprintf(stderr, "[Synth] ERROR: task '%s' requires source audio or audio codes\n", s.task.c_str());
             return -1;
         }
+    }
+
+    // Region coordinate adjustment (repaint and lego_region share the same path).
+    // Shift rs/re into the padded reference frame. When no padding was applied,
+    // left_pad_sec is 0 and the arithmetic is a no-op.
+    // adjusted_start = repainting_start + left_padding_duration
+    if (s.is_repaint || s.is_lego_region) {
+        s.rs += s.left_pad_sec;
+        if (s.re < 0.0f) {
+            // sentinel: outpaint (start < 0) ends at source start, inpaint ends at source end
+            s.re = (s.rr.repainting_start < 0.0f) ? s.left_pad_sec : (float) src_len / 48000.0f + s.left_pad_sec;
+        } else {
+            s.re += s.left_pad_sec;
+        }
+        if (s.re <= s.rs) {
+            fprintf(stderr, "[Region] ERROR: end (%.1f) <= start (%.1f)\n", s.re, s.rs);
+            return -1;
+        }
+        fprintf(stderr, "[Region] %.1fs..%.1fs (canvas=%.1fs)\n", s.rs, s.re, (float) s.T_cover * 1920.0f / 48000.0f);
     }
 
     // Encode timbre from ref_audio (independent of task)
@@ -420,8 +434,11 @@ int ace_synth_generate(AceSynth *         ctx,
         return -1;
     }
 
-    // VAE decode and waveform splice
-    if (ops_vae_decode_and_splice(ctx, batch_n, out, s, src_audio, src_len, cancel, cancel_data) != 0) {
+    // VAE decode and waveform splice.
+    // Outpainting: splice uses the padded source (silence at extended boundaries).
+    const float * splice_audio = s.padded_src.empty() ? src_audio : s.padded_src.data();
+    int           splice_len   = s.padded_src.empty() ? src_len : (int) (s.padded_src.size() / 2);
+    if (ops_vae_decode_and_splice(ctx, batch_n, out, s, splice_audio, splice_len, cancel, cancel_data) != 0) {
         return -1;
     }
 
