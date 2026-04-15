@@ -779,7 +779,8 @@
 					/></label
 				>
 				<label
-					>{t('cfgScale')} <input
+					>{t('cfgScale')}
+					<input
 						type="text"
 						placeholder={ph(dp?.guidance_scale)}
 						bind:value={app.request.guidance_scale}
@@ -809,8 +810,8 @@
 					/></label
 				>
 				<label
-					>{t('shift')} <input type="text" placeholder={ph(dp?.shift)} bind:value={app.request.shift} /></label
-				>
+					>{t('shift')}
+					<input type="text" placeholder={ph(dp?.shift)} bind:value={app.request.shift} /></label
 				>
 				<label
 					>{t('method')}
