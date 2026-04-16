@@ -490,6 +490,7 @@
 			<div class="model-row">
 				<span class="model-label">LM</span>
 				<select
+					class="model-select"
 					bind:value={app.request.lm_model}
 					title="Language Model for Inspire, Format and Compose. Scanned from --models directory at startup."
 				>
@@ -501,6 +502,7 @@
 			<div class="model-row">
 				<span class="model-label">DiT</span>
 				<select
+					class="model-select"
 					bind:value={app.request.synth_model}
 					title="Diffusion Transformer for Synthesize. Scanned from --models directory at startup."
 				>
@@ -512,6 +514,7 @@
 			<div class="model-row">
 				<span class="model-label">LoRA</span>
 				<select
+					class="model-select"
 					bind:value={app.request.lora}
 					title="LoRA adapter merged into DiT at load time. Must match the exact DiT it was trained on. Scanned from --loras directory. ComfyUI format: single .safetensors file. PEFT format: directory with adapter_model.safetensors and adapter_config.json."
 				>
@@ -729,6 +732,7 @@
 			<div class="model-row">
 				<span class="model-label">Type</span>
 				<select
+					class="model-select"
 					value={taskType}
 					onchange={(e) => {
 						app.request.task_type = e.currentTarget.value;
@@ -878,7 +882,6 @@
 		<select
 			bind:value={app.format}
 			title="Output audio format. wav32 outputs raw IEEE float without normalization."
-			style="min-width: 6rem"
 		>
 			<option value="mp3">MP3</option>
 			<option value="wav16">WAV16</option>
@@ -1034,7 +1037,7 @@
 		flex-shrink: 0;
 		width: 2rem;
 	}
-	.model-row select {
+	.model-select {
 		flex: 1;
 		min-width: 0;
 	}
