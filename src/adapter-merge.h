@@ -14,14 +14,20 @@
 // even when destined for a fused QKV tensor. We patch each one separately,
 // so fusion proceeds normally on already merged data.
 //
-// Performance: both paths dispatch the expensive dense math to the best
-// available backend via ggml_backend_graph_compute. LoRA runs one scaled
-// B @ A per tensor. LoKr runs one kron(w1, w2_a @ w2_b) per tensor. The
-// backend graph is strictly the dense compute; BF16 rounding, optional
-// DoRA rescale, base add, and requantization all happen on host row by
-// row, so no full F32 base is ever allocated or uploaded. On CUDA the
-// backend uses cuBLAS plus elementwise kernels, on CPU it uses ggml's
-// threaded SIMD kernels, Vulkan and Metal get their respective backends.
+// Performance: one backend graph per tensor runs the full pipeline. The base
+// weight is uploaded in its native GGUF type directly from the mmap, the
+// backend dequantizes it to F32 via ggml_cast, the adapter delta is built
+// from adapter factors, BF16 rounded in a cast chain, added to base, DoRA
+// rescaled when requested, then cast back to the native GGUF type when the
+// backend supports that encode direction. The result is downloaded straight
+// into the PendingCopy staging buffer.
+//
+// ACE-Step GGUFs ship in BF16, Q8_0, Q4_K_M, Q5_K_M, and Q6_K. On CUDA the
+// backend encode cast handles F32 -> BF16 and F32 -> Q8_0 directly; the
+// K-quants have no F32 -> native kernel so the graph terminates at F32 and
+// ggml_quantize_chunk completes the job on host. Either way the base upload
+// PCIe is cut vs a prior F32 upload, and the dequant, add, BF16 round and
+// DoRA rescale all run on the backend.
 // PendingCopy lookup is O(1) via hashmap.
 
 #include "ggml-alloc.h"
@@ -41,6 +47,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <string>
 #include <unordered_map>
@@ -170,24 +177,9 @@ static int adapter_read_alpha(const char * dir) {
     return alpha;
 }
 
-// Dequant a GGUF tensor buffer to F32 using ggml type traits.
-// Works for all types: F32, BF16, F16, Q4_K, Q8_0, etc.
-static void adapter_dequant(const void * src, float * dst, int64_t nel, enum ggml_type type) {
-    if (type == GGML_TYPE_F32) {
-        memcpy(dst, src, (size_t) nel * sizeof(float));
-        return;
-    }
-    const struct ggml_type_traits * traits = ggml_get_type_traits(type);
-    if (traits->to_float) {
-        traits->to_float(src, dst, nel);
-    } else {
-        fprintf(stderr, "[Adapter] WARNING: no dequant for type %d, zeroing\n", type);
-        memset(dst, 0, (size_t) nel * sizeof(float));
-    }
-}
-
 // Requant F32 data back to original type. Writes into dst buffer.
-// Returns the number of bytes written.
+// Returns the number of bytes written. Used only as host fallback when the
+// backend lacks an F32 -> native cast kernel (K-quants on CUDA today).
 static size_t adapter_requant(const float * src, void * dst, int64_t nel, int64_t n_per_row, enum ggml_type type) {
     if (type == GGML_TYPE_F32) {
         size_t nb = (size_t) nel * sizeof(float);
@@ -216,74 +208,23 @@ static size_t adapter_requant(const float * src, void * dst, int64_t nel, int64_
     return 0;
 }
 
-// Round F32 data through BF16 in place to match PEFT's intermediate precision.
-// Processes in fixed chunks to avoid large stack allocations.
-static void adapter_bf16_round(float * data, int64_t n) {
-    const int64_t chunk = 4096;
-    ggml_bf16_t   tmp[4096];
-    for (int64_t i = 0; i < n; i += chunk) {
-        int64_t len = (n - i < chunk) ? n - i : chunk;
-        ggml_fp32_to_bf16_row_ref(data + i, tmp, len);
-        ggml_bf16_to_fp32_row(tmp, data + i, len);
+// True when the backend has an F32 -> native encode cast kernel for this type.
+// Probed via ggml_backend_supports_op on a throwaway GGML_OP_CPY tensor: the
+// backend only inspects src[0]->type and src[1]->type so no buffer allocation
+// or data upload is needed. When false, the caller downloads F32 and calls
+// adapter_requant on host.
+static bool adapter_backend_can_encode(ggml_backend_t backend, enum ggml_type type) {
+    if (type == GGML_TYPE_F32) {
+        return true;
     }
-}
-
-// Compute delta = scaling * B @ A via the best available backend.
-//
-// On CUDA: tensors are uploaded to GPU, cuBLAS does the GEMM, result
-// is downloaded back. On CPU: ggml's threaded SIMD kernels run locally.
-// The backend abstraction handles all memory management transparently.
-//
-// A is [rank, in_feat] row-major (safetensors convention).
-// B is [out_feat, rank] row-major.
-// Writes out_feat * in_feat floats into delta.
-static void adapter_gemm(const float *  a,
-                         const float *  b,
-                         float *        delta,
-                         int64_t        out_feat,
-                         int64_t        rank,
-                         int64_t        in_feat,
-                         float          scaling,
-                         ggml_backend_t backend) {
-    int64_t a_nel = rank * in_feat;
-    int64_t b_nel = out_feat * rank;
-    int64_t c_nel = out_feat * in_feat;
-
-    // metadata context: tensor descriptors + graph only, no data
-    // (the backend allocates tensor memory via ggml_backend_alloc_ctx_tensors)
-    size_t                  meta   = ggml_tensor_overhead() * 6 + ggml_graph_overhead() + 4096;
+    size_t                  meta   = ggml_tensor_overhead() * 4 + 1024;
     struct ggml_init_params params = { meta, NULL, true };
     struct ggml_context *   ctx    = ggml_init(params);
-
-    // input tensors store raw row-major data from safetensors.
-    // ggml is column-major, so row-major A[rank, in_feat] maps to ggml [in_feat, rank].
-    struct ggml_tensor * ta = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, in_feat, rank);
-    struct ggml_tensor * tb = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, rank, out_feat);
-
-    // graph: transpose A so rank becomes ne[0] (contraction dim), then GEMM + scale.
-    // ggml_cont materializes the transposed view into a contiguous tensor.
-    // on CUDA, all three ops run as GPU kernels (transpose copy + cuBLAS + scale).
-    struct ggml_tensor * ta_t   = ggml_cont(ctx, ggml_transpose(ctx, ta));
-    struct ggml_tensor * result = ggml_scale(ctx, ggml_mul_mat(ctx, ta_t, tb), scaling);
-
-    struct ggml_cgraph * graph = ggml_new_graph(ctx);
-    ggml_build_forward_expand(graph, result);
-
-    // allocate all tensor data on the backend (GPU VRAM or CPU RAM)
-    ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
-
-    // upload: host to device (noop when backend is CPU)
-    ggml_backend_tensor_set(ta, a, 0, (size_t) a_nel * sizeof(float));
-    ggml_backend_tensor_set(tb, b, 0, (size_t) b_nel * sizeof(float));
-
-    // compute: transpose + matmul + scale, all on the backend
-    ggml_backend_graph_compute(backend, graph);
-
-    // download: device to host (noop when backend is CPU)
-    ggml_backend_tensor_get(result, delta, 0, (size_t) c_nel * sizeof(float));
-
-    ggml_backend_buffer_free(buf);
+    struct ggml_tensor *    src    = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 32);
+    struct ggml_tensor *    dst    = ggml_cast(ctx, src, type);
+    bool                    ok     = ggml_backend_supports_op(backend, dst);
     ggml_free(ctx);
+    return ok;
 }
 
 // Build the reverse map from LyCORIS key prefix to GGUF tensor name.
@@ -336,98 +277,6 @@ static bool adapter_split_suffix(const std::string & key, std::string * prefix, 
     return true;
 }
 
-// Compute LoKr delta = (alpha / rank) * kron(w1, w2_a @ w2_b) on the best
-// available backend. Architecturally mirrors adapter_gemm for LoRA: the
-// backend runs only the expensive kron math, the caller handles BF16
-// rounding, optional DoRA rescale, base add, and requantization on host
-// row by row. Keeps the graph minimal, avoids any F32 base allocation or
-// upload, and cuts PCIe traffic to the three tiny adapter factors plus
-// the final delta download.
-//
-// Shapes (host row major -> ggml ne):
-//   w1   (a, b)        -> ne=(b, a)
-//   w2_a (c, r)        -> ne=(r, c)
-//   w2_b (r, d)        -> ne=(d, r)
-//   delta (a*c, b*d)   -> ne=(b*d, a*c)
-//
-// Graph:
-//   tw2b_T = cont(transpose(tw2b))                         ne=(r, d)
-//   tw2    = mul_mat(tw2b_T, tw2a)                         ne=(d, c)
-//   tw1_s  = scale(tw1, alpha / rank)                      ne=(b, a), tiny
-//   touter = mul_mat(reshape(tw1_s, 1, a*b),
-//                    reshape(tw2, 1, c*d))                 ne=(a*b, c*d)
-//   kron_p = permute(reshape_4d(touter, b,a,d,c), 1,3,0,2) ne=(d, b, c, a)
-//   delta  = reshape_2d(cont(kron_p), b*d, a*c)
-//
-// ggml_permute axis_i positions src axis i AT new ne index axis_i
-// (ggml.c:3781 sets ne[axis_i] = src.ne[i]), so mapping src (b, a, d, c)
-// -> new (d, b, c, a) needs src axes (0, 1, 2, 3) to land at new positions
-// (1, 3, 0, 2). The fast pair (d, b) then collapses into in_feat and the
-// slow pair (c, a) into out_feat under reshape_2d. Net effect:
-//   delta_rm[aa*c + cc, bb*d + dd] = W1[aa, bb] * W2[cc, dd]
-//
-// The kron cannot use a straight ggml_mul broadcast: ggml_mul requires one
-// side to already have the full broadcast shape, and neither (1, b, 1, a)
-// nor (d, 1, c, 1) covers (b*d, a*c) alone. An outer product via mul_mat
-// always materializes the full (a*b, c*d) tensor, after which one axis
-// swap yields the kron layout.
-static void lokr_kron_gemm(const float *  w1,
-                           int64_t        a,
-                           int64_t        b,
-                           const float *  w2_a,
-                           int64_t        c,
-                           int64_t        r,
-                           const float *  w2_b,
-                           int64_t        d,
-                           float          scaling,
-                           float *        delta,
-                           ggml_backend_t backend) {
-    int64_t in_feat  = b * d;
-    int64_t out_feat = a * c;
-    int64_t nel      = in_feat * out_feat;
-
-    // metadata context: input tensors + intermediate nodes + graph + slack
-    size_t                  meta   = ggml_tensor_overhead() * 16 + ggml_graph_overhead() + 4096;
-    struct ggml_init_params params = { meta, NULL, true };
-    struct ggml_context *   ctx    = ggml_init(params);
-
-    struct ggml_tensor * tw1  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, b, a);
-    struct ggml_tensor * tw2a = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, r, c);
-    struct ggml_tensor * tw2b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d, r);
-
-    // w2 = w2_a @ w2_b: transpose w2_b so rank sits on ne[0] (contraction dim)
-    struct ggml_tensor * tw2b_T = ggml_cont(ctx, ggml_transpose(ctx, tw2b));
-    struct ggml_tensor * tw2    = ggml_mul_mat(ctx, tw2b_T, tw2a);
-
-    // scale alpha / rank on the tiny (typically 4x4) side, cheapest placement
-    struct ggml_tensor * tw1_s = ggml_scale(ctx, tw1, scaling);
-
-    // kron via outer product + axis swap, see header comment
-    struct ggml_tensor * tw1_flat  = ggml_reshape_2d(ctx, tw1_s, 1, a * b);
-    struct ggml_tensor * tw2_flat  = ggml_reshape_2d(ctx, tw2, 1, c * d);
-    struct ggml_tensor * touter    = ggml_mul_mat(ctx, tw1_flat, tw2_flat);
-    struct ggml_tensor * touter_4d = ggml_reshape_4d(ctx, touter, b, a, d, c);
-    struct ggml_tensor * tkron_p   = ggml_permute(ctx, touter_4d, 1, 3, 0, 2);
-    struct ggml_tensor * tkron_c   = ggml_cont(ctx, tkron_p);
-    struct ggml_tensor * tdelta    = ggml_reshape_2d(ctx, tkron_c, in_feat, out_feat);
-
-    struct ggml_cgraph * graph = ggml_new_graph(ctx);
-    ggml_build_forward_expand(graph, tdelta);
-
-    ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
-
-    ggml_backend_tensor_set(tw1, w1, 0, (size_t) (a * b) * sizeof(float));
-    ggml_backend_tensor_set(tw2a, w2_a, 0, (size_t) (c * r) * sizeof(float));
-    ggml_backend_tensor_set(tw2b, w2_b, 0, (size_t) (r * d) * sizeof(float));
-
-    ggml_backend_graph_compute(backend, graph);
-
-    ggml_backend_tensor_get(tdelta, delta, 0, (size_t) nel * sizeof(float));
-
-    ggml_backend_buffer_free(buf);
-    ggml_free(ctx);
-}
-
 // Detect whether the safetensors payload is a LyCORIS LoKr pack.
 // Any tensor named "*.lokr_w1" or "*.lokr_w2*" is a LoKr marker that LoRA
 // payloads never produce, so a single match is sufficient.
@@ -440,18 +289,48 @@ static bool adapter_detect_lokr(const STFile & st) {
     return false;
 }
 
-// Find the PendingCopy whose src pointer matches the GGUF mmap location of a
-// tensor, patch it with a newly allocated staging buffer containing the merged
-// weight, and return true on success. The F32 merged data in `merged_f32` is
-// quantized back to the tensor's native GGUF type in place into wctx->staging.
-static bool adapter_patch_pending(WeightCtx *                                wctx,
-                                  std::unordered_map<const void *, size_t> & pending_idx,
-                                  const void *                               base_ptr,
-                                  float *                                    merged_f32,
-                                  int64_t                                    nel,
-                                  int64_t                                    ne0,
-                                  enum ggml_type                             ttype,
-                                  const char *                               gguf_name) {
+// Merge one base tensor with an adapter delta entirely inside a backend graph.
+//
+// Responsibilities split between caller and helper:
+//   caller: provide the delta builder lambda that, given the graph ctx,
+//           returns a tdelta tensor of shape ggml ne=(in, out) in F32 row
+//           major (out_feat, in_feat). The lambda is also responsible for
+//           uploading its own adapter factors to the backend inside the
+//           helper's alloc_ctx_tensors sweep (see pattern below).
+//   helper: upload base in native type from mmap, dequant to F32 on backend,
+//           BF16 round delta, add base + delta (plain or DoRA), encode back
+//           to native on backend when supported, download into staging.
+//
+// Upload pattern for caller-owned tensors: the lambda allocates tensors in
+// the shared ctx. The helper calls alloc_ctx_tensors once after the lambda
+// runs, then the lambda's returned populator function is invoked to do the
+// actual ggml_backend_tensor_set calls.
+//
+// build_delta signature expanded: pair<tdelta, populator> so the caller can
+// defer its uploads until after the single alloc sweep. This keeps one graph,
+// one buffer alloc, one compute, one download per merge.
+struct adapter_delta_build {
+    struct ggml_tensor *  tdelta;
+    std::function<void()> upload;
+};
+
+// Execute the unified merge graph for one tensor. Returns true on success.
+// See adapter_delta_build for the caller contract.
+static bool adapter_merge_on_backend(WeightCtx *                                                       wctx,
+                                     std::unordered_map<const void *, size_t> &                        pending_idx,
+                                     const void *                                                      base_ptr,
+                                     enum ggml_type                                                    ttype,
+                                     int64_t                                                           ne0,
+                                     int64_t                                                           ne1,
+                                     const float *                                                     ds,
+                                     float                                                             user_scale,
+                                     ggml_backend_t                                                    backend,
+                                     const char *                                                      gguf_name,
+                                     const std::function<adapter_delta_build(struct ggml_context *)> & build_delta) {
+    // torch.finfo(torch.bfloat16).eps, used verbatim in LyCORIS apply_weight_decompose
+    const float eps = 7.8125e-3f;
+
+    // locate the pending copy upfront: no point computing if we can't apply
     auto pc_it = pending_idx.find(base_ptr);
     if (pc_it == pending_idx.end()) {
         fprintf(stderr, "[Adapter] WARNING: no PendingCopy for %s, skipping\n", gguf_name);
@@ -459,77 +338,101 @@ static bool adapter_patch_pending(WeightCtx *                                wct
     }
     WeightCtx::PendingCopy * pc = &wctx->pending[pc_it->second];
 
-    size_t max_bytes = (size_t) nel * sizeof(float);
-    size_t n_floats  = (max_bytes + sizeof(float) - 1) / sizeof(float);
-    wctx->staging.emplace_back(n_floats);
-    void * merged_buf = wctx->staging.back().data();
+    int64_t nel       = ne0 * ne1;
+    size_t  base_nb   = ggml_row_size(ttype, ne0) * (size_t) ne1;
+    bool    encode_ok = adapter_backend_can_encode(backend, ttype);
 
-    size_t merged_bytes = adapter_requant(merged_f32, merged_buf, nel, ne0, ttype);
-    if (merged_bytes == 0) {
+    // slack for the largest graph (DoRA + BF16 round + cast in/out + caller subgraph)
+    size_t                  meta   = ggml_tensor_overhead() * 64 + ggml_graph_overhead() + 32 * 1024;
+    struct ggml_init_params params = { meta, NULL, true };
+    struct ggml_context *   ctx    = ggml_init(params);
+    if (!ctx) {
         return false;
     }
 
-    pc->src    = merged_buf;
-    pc->nbytes = merged_bytes;
+    // base uploaded in native type, dequant to F32 on backend via ggml_cast
+    struct ggml_tensor * tbase_native = ggml_new_tensor_2d(ctx, ttype, ne0, ne1);
+    struct ggml_tensor * tbase_f32    = ggml_cast(ctx, tbase_native, GGML_TYPE_F32);
+
+    // DoRA scale vector, one F32 per output row when dora_scale is set
+    struct ggml_tensor * tds = ds ? ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, ne1) : NULL;
+
+    // caller builds the delta subgraph and returns its upload closure
+    adapter_delta_build db = build_delta(ctx);
+
+    // BF16 round mirrors LyCORIS diff.to(base.dtype) and PEFT merge_and_unload
+    // intermediate cast. Cast chain runs entirely on backend.
+    struct ggml_tensor * tdelta_bf = ggml_cast(ctx, db.tdelta, GGML_TYPE_BF16);
+    struct ggml_tensor * tdelta_f  = ggml_cast(ctx, tdelta_bf, GGML_TYPE_F32);
+
+    // merge: plain scaled add for no DoRA, weight decompose otherwise
+    struct ggml_tensor * tmerged;
+    if (!tds) {
+        struct ggml_tensor * td_u = (user_scale != 1.0f) ? ggml_scale(ctx, tdelta_f, user_scale) : tdelta_f;
+        tmerged                   = ggml_add(ctx, tbase_f32, td_u);
+    } else {
+        // DoRA per output row: scale = user * (ds / sqrt(sum_sq(m_pre)) + eps) + (1 - user)
+        struct ggml_tensor * tm_pre  = ggml_add(ctx, tbase_f32, tdelta_f);
+        struct ggml_tensor * tsq     = ggml_sqr(ctx, tm_pre);
+        struct ggml_tensor * tss     = ggml_sum_rows(ctx, tsq);  // ne=(1, out)
+        struct ggml_tensor * trn     = ggml_sqrt(ctx, tss);
+        struct ggml_tensor * trn_eps = ggml_scale_bias(ctx, trn, 1.0f, eps);
+        struct ggml_tensor * tscale  = ggml_div(ctx, tds, trn_eps);
+        struct ggml_tensor * tscale_m =
+            (user_scale != 1.0f) ? ggml_scale_bias(ctx, tscale, user_scale, 1.0f - user_scale) : tscale;
+        // broadcast (in, out) * (1, out)
+        tmerged = ggml_mul(ctx, tm_pre, tscale_m);
+    }
+
+    // output: native type when the backend can encode, else F32 for host requant
+    struct ggml_tensor * tout = encode_ok ? ggml_cast(ctx, tmerged, ttype) : tmerged;
+
+    struct ggml_cgraph * graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, tout);
+
+    ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    if (!buf) {
+        ggml_free(ctx);
+        return false;
+    }
+
+    // helper-owned uploads: base in native type from mmap, ds if DoRA
+    ggml_backend_tensor_set(tbase_native, base_ptr, 0, base_nb);
+    if (tds) {
+        ggml_backend_tensor_set(tds, ds, 0, (size_t) ne1 * sizeof(float));
+    }
+    // caller-owned uploads for adapter factors
+    db.upload();
+
+    ggml_backend_graph_compute(backend, graph);
+
+    // allocate a staging slot sized for the native encoded weight, then download
+    size_t n_floats = (base_nb + sizeof(float) - 1) / sizeof(float);
+    wctx->staging.emplace_back(n_floats);
+    void * merged_buf = wctx->staging.back().data();
+
+    if (encode_ok) {
+        // download straight into staging in native type, zero host postprocess
+        ggml_backend_tensor_get(tout, merged_buf, 0, base_nb);
+        pc->src    = merged_buf;
+        pc->nbytes = base_nb;
+    } else {
+        // download F32 then requant on host (K-quants on CUDA: Q4_K_M, Q5_K_M, Q6_K)
+        std::vector<float> merged_f32((size_t) nel);
+        ggml_backend_tensor_get(tout, merged_f32.data(), 0, (size_t) nel * sizeof(float));
+        size_t merged_bytes = adapter_requant(merged_f32.data(), merged_buf, nel, ne0, ttype);
+        if (merged_bytes == 0) {
+            ggml_backend_buffer_free(buf);
+            ggml_free(ctx);
+            return false;
+        }
+        pc->src    = merged_buf;
+        pc->nbytes = merged_bytes;
+    }
+
+    ggml_backend_buffer_free(buf);
+    ggml_free(ctx);
     return true;
-}
-
-// Add base weight to delta row by row. Each row is dequantized into a small
-// scratch buffer, accumulated into delta, then discarded. Avoids a second
-// full size F32 allocation.
-static void adapter_add_base(const void * base_ptr, enum ggml_type ttype, int64_t ne0, int64_t ne1, float * delta) {
-    size_t             row_bytes = ggml_row_size(ttype, ne0);
-    std::vector<float> row_buf((size_t) ne0);
-    for (int64_t i = 0; i < ne1; i++) {
-        const void * row_src   = (const uint8_t *) base_ptr + i * row_bytes;
-        float *      delta_row = delta + i * ne0;
-        adapter_dequant(row_src, row_buf.data(), ne0, ttype);
-        for (int64_t j = 0; j < ne0; j++) {
-            delta_row[j] += row_buf[j];
-        }
-    }
-}
-
-// Merge base into delta with DoRA magnitude decomposition per output row.
-// Matches LyCORIS apply_weight_decompose at lycoris/modules/lokr.py for non
-// bypass mode. Base is dequantized one row at a time into a scratch buffer
-// so no full F32 base allocation is needed.
-//
-//   m     = base + delta                                    per row
-//   norm  = sqrt(sum(m ^ 2)) + eps                          per row
-//   scale = user_scale * (dora_scale / norm) + (1 - user_scale)
-//   out   = m * scale                                       per row broadcast
-//
-// delta_inout starts as the scaled kron delta, ends as the full merged weight
-// F32 ready for requantization. One pass per row: dequant, accumulate, sqsum,
-// rescale. Host scalar cost is trivial next to the backend kron compute.
-static void adapter_apply_dora(const void *   base_ptr,
-                               enum ggml_type ttype,
-                               int64_t        ne0,
-                               int64_t        ne1,
-                               const float *  ds,
-                               float          user_scale,
-                               float *        delta_inout) {
-    // torch.finfo(torch.bfloat16).eps, used verbatim in LyCORIS
-    const float eps = 7.8125e-3f;
-
-    size_t             row_bytes = ggml_row_size(ttype, ne0);
-    std::vector<float> row_buf((size_t) ne0);
-    for (int64_t i = 0; i < ne1; i++) {
-        const void * row_src = (const uint8_t *) base_ptr + i * row_bytes;
-        float *      row_out = delta_inout + i * ne0;
-        adapter_dequant(row_src, row_buf.data(), ne0, ttype);
-        float sq_sum = 0.0f;
-        for (int64_t j = 0; j < ne0; j++) {
-            row_out[j] += row_buf[j];
-            sq_sum += row_out[j] * row_out[j];
-        }
-        float norm  = std::sqrt(sq_sum) + eps;
-        float scale = user_scale * (ds[i] / norm) + (1.0f - user_scale);
-        for (int64_t j = 0; j < ne0; j++) {
-            row_out[j] *= scale;
-        }
-    }
 }
 
 // LoRA merge path. Matches PEFT merge_and_unload for PEFT payloads and ComfyUI
@@ -608,7 +511,6 @@ static bool adapter_merge_lora(WeightCtx *         wctx,
         enum ggml_type       ttype = tmeta->type;
         int64_t              ne0   = tmeta->ne[0];
         int64_t              ne1   = tmeta->ne[1];
-        int64_t              nel   = ne0 * ne1;
 
         size_t       toff     = gguf_get_tensor_offset(gf.gguf, tidx);
         const void * base_ptr = gf.mapping + gf.data_offset + toff;
@@ -645,11 +547,11 @@ static bool adapter_merge_lora(WeightCtx *         wctx,
         }
         float scaling = (alpha / (float) rank) * scale;
 
+        // load A and B to F32, PEFT rounds them through BF16 before the GEMM
         int64_t            a_nel = rank * in_feat;
         int64_t            b_nel = out_feat * rank;
         std::vector<float> a_f32((size_t) a_nel);
         std::vector<float> b_f32((size_t) b_nel);
-
         if (!adapter_to_f32(st_data(st, *ea), a_f32.data(), a_nel, ea->dtype)) {
             fprintf(stderr, "[Adapter] WARNING: unsupported dtype %s for lora_A\n", ea->dtype.c_str());
             skipped++;
@@ -661,22 +563,29 @@ static bool adapter_merge_lora(WeightCtx *         wctx,
             continue;
         }
 
-        // PEFT casts LoRA weights to BF16 before computing the delta.
-        // We replicate this round trip so B @ A matches merge_and_unload exactly.
-        adapter_bf16_round(a_f32.data(), a_nel);
-        adapter_bf16_round(b_f32.data(), b_nel);
+        // delta = scaling * B @ A, built inside the unified merge graph.
+        // A row major (rank, in_feat) stored as ggml ne=(in_feat, rank), transposed
+        // so rank sits on ne[0] for mul_mat contraction. Result ne=(in_feat, out_feat).
+        auto build = [&](struct ggml_context * ctx) {
+            struct ggml_tensor * ta     = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, in_feat, rank);
+            struct ggml_tensor * tb     = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, rank, out_feat);
+            // PEFT BF16 round on A and B before the GEMM, done on backend.
+            struct ggml_tensor * ta_br  = ggml_cast(ctx, ggml_cast(ctx, ta, GGML_TYPE_BF16), GGML_TYPE_F32);
+            struct ggml_tensor * tb_br  = ggml_cast(ctx, ggml_cast(ctx, tb, GGML_TYPE_BF16), GGML_TYPE_F32);
+            struct ggml_tensor * ta_t   = ggml_cont(ctx, ggml_transpose(ctx, ta_br));
+            struct ggml_tensor * tdelta = ggml_scale(ctx, ggml_mul_mat(ctx, ta_t, tb_br), scaling);
 
-        // delta = scaling * B @ A via backend GEMM (cuBLAS on CUDA, SIMD on CPU)
-        std::vector<float> delta((size_t) nel);
-        adapter_gemm(a_f32.data(), b_f32.data(), delta.data(), out_feat, rank, in_feat, scaling, backend);
+            adapter_delta_build db;
+            db.tdelta = tdelta;
+            db.upload = [=]() {
+                ggml_backend_tensor_set(ta, a_f32.data(), 0, (size_t) a_nel * sizeof(float));
+                ggml_backend_tensor_set(tb, b_f32.data(), 0, (size_t) b_nel * sizeof(float));
+            };
+            return db;
+        };
 
-        // round delta through BF16 to match PEFT intermediate precision.
-        // without this, the diffusion model diverges (very weight sensitive).
-        adapter_bf16_round(delta.data(), nel);
-
-        adapter_add_base(base_ptr, ttype, ne0, ne1, delta.data());
-
-        if (!adapter_patch_pending(wctx, pending_idx, base_ptr, delta.data(), nel, ne0, ttype, gguf_name.c_str())) {
+        if (!adapter_merge_on_backend(wctx, pending_idx, base_ptr, ttype, ne0, ne1, nullptr, 1.0f, backend,
+                                      gguf_name.c_str(), build)) {
             skipped++;
             continue;
         }
@@ -696,6 +605,25 @@ static bool adapter_merge_lora(WeightCtx *         wctx,
 // Only the dense w2 factorization is supported (w2_a @ w2_b), which is what
 // ACE-Step LoKr adapters use. w1 is expected whole, not factorized (no w1_a).
 // Tucker decomposition and convolutional LoKr are not implemented.
+//
+// Kron layout on GGML:
+//   w1    row major (a, b) -> ggml ne=(b, a)
+//   w2_a  row major (c, r) -> ggml ne=(r, c)
+//   w2_b  row major (r, d) -> ggml ne=(d, r)
+//   delta row major (a*c, b*d) -> ggml ne=(b*d, a*c)
+//
+// Graph: tw2 = mul_mat(cont(transpose(tw2b)), tw2a) = ne=(d, c).
+//        tw1_s = scale(tw1, alpha / rank), scaling on the tiny side.
+//        touter = mul_mat(reshape(tw1_s, 1, a*b), reshape(tw2, 1, c*d)) = ne=(a*b, c*d)
+//        kron_p = permute(reshape_4d(touter, b, a, d, c), 1, 3, 0, 2) = ne=(d, b, c, a)
+//        delta  = reshape_2d(cont(kron_p), b*d, a*c)
+//
+// ggml_permute axis_i positions src axis i AT new ne index axis_i
+// (ggml.c:3781 sets ne[axis_i] = src.ne[i]), so mapping src (b, a, d, c)
+// -> new (d, b, c, a) needs src axes (0, 1, 2, 3) to land at new positions
+// (1, 3, 0, 2). The fast pair (d, b) then collapses into in_feat and the
+// slow pair (c, a) into out_feat under reshape_2d. Net effect:
+//   delta_rm[aa*c + cc, bb*d + dd] = W1[aa, bb] * W2[cc, dd]
 static bool adapter_merge_lokr(WeightCtx *       wctx,
                                const GGUFModel & gf,
                                const STFile &    st,
@@ -774,13 +702,12 @@ static bool adapter_merge_lokr(WeightCtx *       wctx,
         enum ggml_type       ttype = tmeta->type;
         int64_t              ne0   = tmeta->ne[0];
         int64_t              ne1   = tmeta->ne[1];
-        int64_t              nel   = ne0 * ne1;
 
         size_t       toff     = gguf_get_tensor_offset(gf.gguf, tidx);
         const void * base_ptr = gf.mapping + gf.data_offset + toff;
 
         // LoKr shapes (safetensors row major):
-        //   w1   : (a, b)                      with a = b = 4 for factor=4
+        //   w1   : (a, b)      with a = b = 4 for factor=4
         //   w2_a : (c, rank)
         //   w2_b : (rank, d)
         // Kronecker product yields (a*c, b*d) = (out_feat, in_feat) = (ne1, ne0).
@@ -807,7 +734,7 @@ static bool adapter_merge_lokr(WeightCtx *       wctx,
             continue;
         }
 
-        // alpha scalar (shape []), dtype varies across trainers: F32, BF16, or F16
+        // alpha scalar, shape [] varies across trainers in dtype: F32, BF16, F16
         float alpha = 0.0f;
         if (!adapter_to_f32(st_data(st, *m.alpha), &alpha, 1, m.alpha->dtype)) {
             fprintf(stderr, "[Adapter] WARNING: unsupported alpha dtype %s for %s, skipping\n", m.alpha->dtype.c_str(),
@@ -823,7 +750,6 @@ static bool adapter_merge_lokr(WeightCtx *       wctx,
         std::vector<float> w1_f32((size_t) w1_nel);
         std::vector<float> w2a_f32((size_t) w2a_nel);
         std::vector<float> w2b_f32((size_t) w2b_nel);
-
         if (!adapter_to_f32(st_data(st, *m.w1), w1_f32.data(), w1_nel, m.w1->dtype) ||
             !adapter_to_f32(st_data(st, *m.w2_a), w2a_f32.data(), w2a_nel, m.w2_a->dtype) ||
             !adapter_to_f32(st_data(st, *m.w2_b), w2b_f32.data(), w2b_nel, m.w2_b->dtype)) {
@@ -832,7 +758,7 @@ static bool adapter_merge_lokr(WeightCtx *       wctx,
             continue;
         }
 
-        // dora_scale dequantized first when present, row count matched to ne1
+        // optional DoRA scale vector, one F32 per output row
         const float *      ds_ptr = nullptr;
         std::vector<float> ds_f32;
         if (m.dora_scale) {
@@ -853,31 +779,46 @@ static bool adapter_merge_lokr(WeightCtx *       wctx,
             ds_ptr = ds_f32.data();
         }
 
-        // kron delta on backend, mirrors adapter_gemm for LoRA
-        std::vector<float> delta((size_t) nel);
-        float              scaling = alpha / (float) r;
-        lokr_kron_gemm(w1_f32.data(), a, b, w2a_f32.data(), c, r, w2b_f32.data(), d, scaling, delta.data(), backend);
+        float scaling = alpha / (float) r;
 
-        // BF16 round mirrors LyCORIS diff.to(base.dtype) before the add
-        adapter_bf16_round(delta.data(), nel);
+        auto build = [&](struct ggml_context * ctx) {
+            struct ggml_tensor * tw1  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, b, a);
+            struct ggml_tensor * tw2a = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, r, c);
+            struct ggml_tensor * tw2b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d, r);
 
-        // merge base into delta per row: DoRA rescale when dora_scale is
-        // present, plain scaled add otherwise. No full F32 base allocation.
-        if (ds_ptr) {
-            adapter_apply_dora(base_ptr, ttype, ne0, ne1, ds_ptr, user_scale, delta.data());
-            dora_count++;
-        } else {
-            if (user_scale != 1.0f) {
-                for (int64_t i = 0; i < nel; i++) {
-                    delta[i] *= user_scale;
-                }
-            }
-            adapter_add_base(base_ptr, ttype, ne0, ne1, delta.data());
-        }
+            // w2 = w2_a @ w2_b: transpose w2_b so rank sits on ne[0] contraction dim
+            struct ggml_tensor * tw2b_T = ggml_cont(ctx, ggml_transpose(ctx, tw2b));
+            struct ggml_tensor * tw2    = ggml_mul_mat(ctx, tw2b_T, tw2a);
 
-        if (!adapter_patch_pending(wctx, pending_idx, base_ptr, delta.data(), nel, ne0, ttype, gguf_name.c_str())) {
+            // scale alpha / rank on the tiny (typically 4x4) side, cheapest placement
+            struct ggml_tensor * tw1_s = ggml_scale(ctx, tw1, scaling);
+
+            // kron via outer product + axis swap
+            struct ggml_tensor * tw1_flat  = ggml_reshape_2d(ctx, tw1_s, 1, a * b);
+            struct ggml_tensor * tw2_flat  = ggml_reshape_2d(ctx, tw2, 1, c * d);
+            struct ggml_tensor * touter    = ggml_mul_mat(ctx, tw1_flat, tw2_flat);
+            struct ggml_tensor * touter_4d = ggml_reshape_4d(ctx, touter, b, a, d, c);
+            struct ggml_tensor * tkron_p   = ggml_permute(ctx, touter_4d, 1, 3, 0, 2);
+            struct ggml_tensor * tkron_c   = ggml_cont(ctx, tkron_p);
+            struct ggml_tensor * tdelta    = ggml_reshape_2d(ctx, tkron_c, b * d, a * c);
+
+            adapter_delta_build db;
+            db.tdelta = tdelta;
+            db.upload = [=]() {
+                ggml_backend_tensor_set(tw1, w1_f32.data(), 0, (size_t) w1_nel * sizeof(float));
+                ggml_backend_tensor_set(tw2a, w2a_f32.data(), 0, (size_t) w2a_nel * sizeof(float));
+                ggml_backend_tensor_set(tw2b, w2b_f32.data(), 0, (size_t) w2b_nel * sizeof(float));
+            };
+            return db;
+        };
+
+        if (!adapter_merge_on_backend(wctx, pending_idx, base_ptr, ttype, ne0, ne1, ds_ptr, user_scale, backend,
+                                      gguf_name.c_str(), build)) {
             skipped++;
             continue;
+        }
+        if (ds_ptr) {
+            dora_count++;
         }
         merged++;
     }
