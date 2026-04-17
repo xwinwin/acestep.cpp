@@ -36,6 +36,7 @@
 #include "gguf-weights.h"
 #include "safetensors.h"
 #include "weight-ctx.h"
+#include "yyjson.h"
 
 #include <sys/stat.h>
 #ifdef _WIN32
@@ -175,6 +176,43 @@ static int adapter_read_alpha(const char * dir) {
         fprintf(stderr, "[Adapter] adapter_config.json: alpha=%d\n", alpha);
     }
     return alpha;
+}
+
+// Read linear_dim from LyCORIS __metadata__.lokr_config for LoKr payloads.
+// LyCORIS stores lokr_config as a serialized JSON string inside the safetensors
+// header __metadata__ object. This dim is the LoRA rank used for the w2
+// factorization, and is the only place it lives when w2 is stored as a single
+// monolithic tensor (LyCORIS use_w2 path, factor=-1 with linear_dim bigger
+// than the factorized budget). Returns 0 when absent or unparseable.
+static int adapter_read_lokr_dim(const STFile & st) {
+    if (st.data_offset <= 8) {
+        return 0;
+    }
+    size_t       hdr_len = st.data_offset - 8;
+    const char * hdr     = (const char *) st.mapping + 8;
+
+    yyjson_doc * doc = yyjson_read(hdr, hdr_len, 0);
+    if (!doc) {
+        return 0;
+    }
+    int          dim  = 0;
+    yyjson_val * root = yyjson_doc_get_root(doc);
+    yyjson_val * meta = yyjson_obj_get(root, "__metadata__");
+    if (meta && yyjson_is_obj(meta)) {
+        yyjson_val * cfg = yyjson_obj_get(meta, "lokr_config");
+        if (cfg && yyjson_is_str(cfg)) {
+            yyjson_doc * sub = yyjson_read(yyjson_get_str(cfg), yyjson_get_len(cfg), 0);
+            if (sub) {
+                yyjson_val * ld = yyjson_obj_get(yyjson_doc_get_root(sub), "linear_dim");
+                if (ld && yyjson_is_int(ld)) {
+                    dim = (int) yyjson_get_int(ld);
+                }
+                yyjson_doc_free(sub);
+            }
+        }
+    }
+    yyjson_doc_free(doc);
+    return dim;
 }
 
 // Requant F32 data back to original type. Writes into dst buffer.
@@ -598,25 +636,33 @@ static bool adapter_merge_lora(WeightCtx *         wctx,
 
 // LoKr merge path. Matches the LyCORIS runtime forward for LoKr at
 // lycoris/modules/lokr.py:551..566 (non bypass mode, scalar=1):
-//   delta       = (alpha / rank) * kron(w1, w2_a @ w2_b)
+//   delta       = (alpha / rank) * kron(w1, W2)
 //   no DoRA     : merged = base + delta * multiplier
 //   DoRA present: merged = apply_weight_decompose(base + delta, multiplier)
 //
-// Only the dense w2 factorization is supported (w2_a @ w2_b), which is what
-// ACE-Step LoKr adapters use. w1 is expected whole, not factorized (no w1_a).
-// Tucker decomposition and convolutional LoKr are not implemented.
+// Two W2 variants are handled, selected per module by the suffixes present:
+//   factorized  : W2 = w2_a @ w2_b, rank = w2_a.shape[1] = w2_b.shape[0]
+//   monolithic  : W2 = w2 directly, rank = __metadata__.lokr_config.linear_dim
 //
-// Kron layout on GGML:
-//   w1    row major (a, b) -> ggml ne=(b, a)
-//   w2_a  row major (c, r) -> ggml ne=(r, c)
-//   w2_b  row major (r, d) -> ggml ne=(d, r)
-//   delta row major (a*c, b*d) -> ggml ne=(b*d, a*c)
+// LyCORIS picks monolithic when the factorized rank would not shrink the
+// tensor (use_w2 path). qinglong SFT is fully factorized, garage-band is
+// fully monolithic. w1 is always whole, not factorized (no w1_a). Tucker
+// decomposition and convolutional LoKr are not implemented.
 //
-// Graph: tw2 = mul_mat(cont(transpose(tw2b)), tw2a) = ne=(d, c).
-//        tw1_s = scale(tw1, alpha / rank), scaling on the tiny side.
-//        touter = mul_mat(reshape(tw1_s, 1, a*b), reshape(tw2, 1, c*d)) = ne=(a*b, c*d)
-//        kron_p = permute(reshape_4d(touter, b, a, d, c), 1, 3, 0, 2) = ne=(d, b, c, a)
-//        delta  = reshape_2d(cont(kron_p), b*d, a*c)
+// Kron layout on GGML (same for both variants):
+//   w1     row major (a, b)     -> ggml ne=(b, a)
+//   W2     row major (c, d)     -> ggml ne=(d, c)
+//   delta  row major (a*c, b*d) -> ggml ne=(b*d, a*c)
+//
+// Graph, factorized:
+//   tw2 = mul_mat(cont(transpose(tw2b)), tw2a) = ne=(d, c)
+// Graph, monolithic:
+//   tw2 uploaded directly, ne=(d, c)
+// Shared downstream:
+//   tw1_s = scale(tw1, alpha / rank), scaling on the tiny side.
+//   touter = mul_mat(reshape(tw1_s, 1, a*b), reshape(tw2, 1, c*d)) = ne=(a*b, c*d)
+//   kron_p = permute(reshape_4d(touter, b, a, d, c), 1, 3, 0, 2) = ne=(d, b, c, a)
+//   delta  = reshape_2d(cont(kron_p), b*d, a*c)
 //
 // ggml_permute axis_i positions src axis i AT new ne index axis_i
 // (ggml.c:3781 sets ne[axis_i] = src.ne[i]), so mapping src (b, a, d, c)
@@ -629,9 +675,11 @@ static bool adapter_merge_lokr(WeightCtx *       wctx,
                                const STFile &    st,
                                float             user_scale,
                                ggml_backend_t    backend) {
-    // group the five tensors per LyCORIS module prefix
+    // group the per module tensors by LyCORIS prefix. Each module has either
+    // w2 alone (monolithic) or w2_a + w2_b (factorized), never both.
     struct LoKrEntry {
         const STEntry * w1         = nullptr;
+        const STEntry * w2         = nullptr;
         const STEntry * w2_a       = nullptr;
         const STEntry * w2_b       = nullptr;
         const STEntry * alpha      = nullptr;
@@ -651,6 +699,8 @@ static bool adapter_merge_lokr(WeightCtx *       wctx,
         LoKrEntry & m = modules[prefix];
         if (suffix == "lokr_w1") {
             m.w1 = &e;
+        } else if (suffix == "lokr_w2") {
+            m.w2 = &e;
         } else if (suffix == "lokr_w2_a") {
             m.w2_a = &e;
         } else if (suffix == "lokr_w2_b") {
@@ -670,16 +720,25 @@ static bool adapter_merge_lokr(WeightCtx *       wctx,
         pending_idx[wctx->pending[i].src] = i;
     }
 
+    // linear_dim from __metadata__.lokr_config, only needed by monolithic modules.
+    // Factorized modules derive rank from w2_a / w2_b shapes and ignore this value.
+    int lokr_dim = adapter_read_lokr_dim(st);
+
     int merged     = 0;
     int skipped    = 0;
     int dora_count = 0;
+    int mono_count = 0;
 
     for (const auto & kv : modules) {
         const std::string & lyc_prefix = kv.first;
         const LoKrEntry &   m          = kv.second;
 
-        if (!m.w1 || !m.w2_a || !m.w2_b || !m.alpha) {
-            fprintf(stderr, "[Adapter] WARNING: incomplete LoKr module %s, skipping\n", lyc_prefix.c_str());
+        // per module variant: factorized (w2_a + w2_b) XOR monolithic (w2)
+        bool has_factor = (m.w2_a && m.w2_b);
+        bool has_mono   = (m.w2 != nullptr);
+        if (!m.w1 || !m.alpha || has_factor == has_mono) {
+            fprintf(stderr, "[Adapter] WARNING: incomplete or ambiguous LoKr module %s, skipping\n",
+                    lyc_prefix.c_str());
             skipped++;
             continue;
         }
@@ -707,23 +766,40 @@ static bool adapter_merge_lokr(WeightCtx *       wctx,
         const void * base_ptr = gf.mapping + gf.data_offset + toff;
 
         // LoKr shapes (safetensors row major):
-        //   w1   : (a, b)      with a = b = 4 for factor=4
-        //   w2_a : (c, rank)
-        //   w2_b : (rank, d)
+        //   w1 : (a, b)
+        //   factorized : w2_a (c, rank), w2_b (rank, d)
+        //   monolithic : w2 (c, d), rank read from lokr_config.linear_dim
         // Kronecker product yields (a*c, b*d) = (out_feat, in_feat) = (ne1, ne0).
-        int64_t a  = m.w1->shape[0];
-        int64_t b  = m.w1->shape[1];
-        int64_t c  = m.w2_a->shape[0];
-        int64_t r  = m.w2_a->shape[1];
-        int64_t r2 = m.w2_b->shape[0];
-        int64_t d  = m.w2_b->shape[1];
+        int64_t a = m.w1->shape[0];
+        int64_t b = m.w1->shape[1];
+        int64_t c;
+        int64_t d;
+        int64_t r;
 
-        if (r != r2) {
-            fprintf(stderr, "[Adapter] WARNING: LoKr rank mismatch w2_a=%lld vs w2_b=%lld for %s\n", (long long) r,
-                    (long long) r2, lyc_prefix.c_str());
-            skipped++;
-            continue;
+        if (has_factor) {
+            c          = m.w2_a->shape[0];
+            r          = m.w2_a->shape[1];
+            d          = m.w2_b->shape[1];
+            int64_t r2 = m.w2_b->shape[0];
+            if (r != r2) {
+                fprintf(stderr, "[Adapter] WARNING: LoKr rank mismatch w2_a=%lld vs w2_b=%lld for %s\n", (long long) r,
+                        (long long) r2, lyc_prefix.c_str());
+                skipped++;
+                continue;
+            }
+        } else {
+            c = m.w2->shape[0];
+            d = m.w2->shape[1];
+            if (lokr_dim <= 0) {
+                fprintf(stderr,
+                        "[Adapter] WARNING: monolithic LoKr %s needs __metadata__.lokr_config.linear_dim, skipping\n",
+                        lyc_prefix.c_str());
+                skipped++;
+                continue;
+            }
+            r = lokr_dim;
         }
+
         if (a * c != ne1 || b * d != ne0) {
             fprintf(stderr,
                     "[Adapter] WARNING: LoKr shape mismatch for %s: kron(%lldx%lld, %lldx%lld) = %lldx%lld vs GGUF "
@@ -743,19 +819,44 @@ static bool adapter_merge_lokr(WeightCtx *       wctx,
             continue;
         }
 
-        // load w1, w2_a, w2_b to F32
-        int64_t            w1_nel  = a * b;
-        int64_t            w2a_nel = c * r;
-        int64_t            w2b_nel = r * d;
+        // load w1 always to F32
+        int64_t            w1_nel = a * b;
         std::vector<float> w1_f32((size_t) w1_nel);
-        std::vector<float> w2a_f32((size_t) w2a_nel);
-        std::vector<float> w2b_f32((size_t) w2b_nel);
-        if (!adapter_to_f32(st_data(st, *m.w1), w1_f32.data(), w1_nel, m.w1->dtype) ||
-            !adapter_to_f32(st_data(st, *m.w2_a), w2a_f32.data(), w2a_nel, m.w2_a->dtype) ||
-            !adapter_to_f32(st_data(st, *m.w2_b), w2b_f32.data(), w2b_nel, m.w2_b->dtype)) {
-            fprintf(stderr, "[Adapter] WARNING: unsupported dtype in LoKr module %s, skipping\n", lyc_prefix.c_str());
+        if (!adapter_to_f32(st_data(st, *m.w1), w1_f32.data(), w1_nel, m.w1->dtype)) {
+            fprintf(stderr, "[Adapter] WARNING: unsupported dtype %s for lokr_w1 %s\n", m.w1->dtype.c_str(),
+                    lyc_prefix.c_str());
             skipped++;
             continue;
+        }
+
+        // load w2 payload: two buffers for factorized, one for monolithic
+        int64_t            w2_nel  = 0;
+        int64_t            w2a_nel = 0;
+        int64_t            w2b_nel = 0;
+        std::vector<float> w2_f32;
+        std::vector<float> w2a_f32;
+        std::vector<float> w2b_f32;
+        if (has_factor) {
+            w2a_nel = c * r;
+            w2b_nel = r * d;
+            w2a_f32.resize((size_t) w2a_nel);
+            w2b_f32.resize((size_t) w2b_nel);
+            if (!adapter_to_f32(st_data(st, *m.w2_a), w2a_f32.data(), w2a_nel, m.w2_a->dtype) ||
+                !adapter_to_f32(st_data(st, *m.w2_b), w2b_f32.data(), w2b_nel, m.w2_b->dtype)) {
+                fprintf(stderr, "[Adapter] WARNING: unsupported dtype in LoKr module %s, skipping\n",
+                        lyc_prefix.c_str());
+                skipped++;
+                continue;
+            }
+        } else {
+            w2_nel = c * d;
+            w2_f32.resize((size_t) w2_nel);
+            if (!adapter_to_f32(st_data(st, *m.w2), w2_f32.data(), w2_nel, m.w2->dtype)) {
+                fprintf(stderr, "[Adapter] WARNING: unsupported dtype %s for lokr_w2 %s\n", m.w2->dtype.c_str(),
+                        lyc_prefix.c_str());
+                skipped++;
+                continue;
+            }
         }
 
         // optional DoRA scale vector, one F32 per output row
@@ -782,13 +883,23 @@ static bool adapter_merge_lokr(WeightCtx *       wctx,
         float scaling = alpha / (float) r;
 
         auto build = [&](struct ggml_context * ctx) {
-            struct ggml_tensor * tw1  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, b, a);
-            struct ggml_tensor * tw2a = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, r, c);
-            struct ggml_tensor * tw2b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d, r);
+            struct ggml_tensor * tw1 = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, b, a);
 
-            // w2 = w2_a @ w2_b: transpose w2_b so rank sits on ne[0] contraction dim
-            struct ggml_tensor * tw2b_T = ggml_cont(ctx, ggml_transpose(ctx, tw2b));
-            struct ggml_tensor * tw2    = ggml_mul_mat(ctx, tw2b_T, tw2a);
+            // tw2 ne=(d, c): w2_a @ w2_b for factorized, direct upload for monolithic
+            struct ggml_tensor * tw2;
+            struct ggml_tensor * tw2_src = nullptr;
+            struct ggml_tensor * tw2a    = nullptr;
+            struct ggml_tensor * tw2b    = nullptr;
+            if (has_factor) {
+                tw2a                        = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, r, c);
+                tw2b                        = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d, r);
+                // transpose w2_b so rank sits on ne[0] contraction dim
+                struct ggml_tensor * tw2b_T = ggml_cont(ctx, ggml_transpose(ctx, tw2b));
+                tw2                         = ggml_mul_mat(ctx, tw2b_T, tw2a);
+            } else {
+                tw2_src = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d, c);
+                tw2     = tw2_src;
+            }
 
             // scale alpha / rank on the tiny (typically 4x4) side, cheapest placement
             struct ggml_tensor * tw1_s = ggml_scale(ctx, tw1, scaling);
@@ -806,8 +917,12 @@ static bool adapter_merge_lokr(WeightCtx *       wctx,
             db.tdelta = tdelta;
             db.upload = [=]() {
                 ggml_backend_tensor_set(tw1, w1_f32.data(), 0, (size_t) w1_nel * sizeof(float));
-                ggml_backend_tensor_set(tw2a, w2a_f32.data(), 0, (size_t) w2a_nel * sizeof(float));
-                ggml_backend_tensor_set(tw2b, w2b_f32.data(), 0, (size_t) w2b_nel * sizeof(float));
+                if (has_factor) {
+                    ggml_backend_tensor_set(tw2a, w2a_f32.data(), 0, (size_t) w2a_nel * sizeof(float));
+                    ggml_backend_tensor_set(tw2b, w2b_f32.data(), 0, (size_t) w2b_nel * sizeof(float));
+                } else {
+                    ggml_backend_tensor_set(tw2_src, w2_f32.data(), 0, (size_t) w2_nel * sizeof(float));
+                }
             };
             return db;
         };
@@ -820,11 +935,15 @@ static bool adapter_merge_lokr(WeightCtx *       wctx,
         if (ds_ptr) {
             dora_count++;
         }
+        if (!has_factor) {
+            mono_count++;
+        }
         merged++;
     }
 
-    fprintf(stderr, "[Adapter] LoKr merged %d modules (%d with DoRA, skipped %d), scale=%.2f\n", merged, dora_count,
-            skipped, user_scale);
+    fprintf(stderr,
+            "[Adapter] LoKr merged %d modules (%d factorized, %d monolithic, %d with DoRA, skipped %d), scale=%.2f\n",
+            merged, merged - mono_count, mono_count, dora_count, skipped, user_scale);
     return merged > 0;
 }
 
@@ -832,29 +951,48 @@ static bool adapter_merge_lokr(WeightCtx *       wctx,
 //
 // Call after all GGUF tensors are loaded into wctx->pending but before wctx_alloc.
 // Detects the adapter algorithm from the safetensors payload and dispatches to
-// the matching merge path. The adapter_path can be a .safetensors file or a
-// directory containing adapter_model.safetensors (PEFT LoRA), lokr_weights.safetensors
-// (ACE-Step LoKr), or a single LyCORIS file.
+// the matching merge path. The adapter_path points to either:
+//   PEFT directory  : a folder with adapter_model.safetensors + adapter_config.json
+//   LyCORIS file    : a flat .safetensors file (LoRA ComfyUI or LoKr)
+// Directories exist only for PEFT. LyCORIS ships as a single file for both LoRA
+// and LoKr payloads.
 static bool adapter_merge(WeightCtx *       wctx,
                           const GGUFModel & gf,
                           const char *      adapter_path,
                           float             scale,
                           ggml_backend_t    backend) {
-    std::string sf_path = adapter_path;
-    std::string dir     = adapter_path;
+    std::string sf_path;
+    std::string cfg_dir;
 
     struct stat sb;
-    if (stat(adapter_path, &sb) == 0 && S_ISDIR(sb.st_mode)) {
-        // try PEFT layout first, then LyCORIS ACE-Step layout
-        std::string peft_path = std::string(adapter_path) + "/adapter_model.safetensors";
-        if (stat(peft_path.c_str(), &sb) == 0) {
-            sf_path = peft_path;
-        } else {
-            sf_path = std::string(adapter_path) + "/lokr_weights.safetensors";
+    if (stat(adapter_path, &sb) != 0) {
+        fprintf(stderr, "[Adapter] path does not exist: %s\n", adapter_path);
+        return false;
+    }
+
+    if (S_ISDIR(sb.st_mode)) {
+        // PEFT directory: adapter_model.safetensors is mandatory
+        sf_path = std::string(adapter_path) + "/adapter_model.safetensors";
+        cfg_dir = adapter_path;
+        if (stat(sf_path.c_str(), &sb) != 0) {
+            fprintf(stderr, "[Adapter] directory %s is not a PEFT layout, missing adapter_model.safetensors\n",
+                    adapter_path);
+            return false;
+        }
+        // warn if adapter_config.json is missing, alpha lives there for PEFT so
+        // the merge silently falls back to alpha=rank (scaling=1) otherwise
+        std::string cfg_path = cfg_dir + "/adapter_config.json";
+        if (stat(cfg_path.c_str(), &sb) != 0) {
+            fprintf(stderr,
+                    "[Adapter] WARNING: PEFT directory %s missing adapter_config.json, alpha falls back to rank "
+                    "(scaling=1.0). If training used lora_alpha != rank, the merge will be under or over scaled.\n",
+                    adapter_path);
         }
     } else {
-        size_t sep = dir.find_last_of("/\\");
-        dir        = (sep != std::string::npos) ? dir.substr(0, sep) : ".";
+        // LyCORIS flat file, LoRA or LoKr
+        sf_path    = adapter_path;
+        size_t sep = sf_path.find_last_of("/\\");
+        cfg_dir    = (sep != std::string::npos) ? sf_path.substr(0, sep) : ".";
     }
 
     STFile st = {};
@@ -866,7 +1004,7 @@ static bool adapter_merge(WeightCtx *       wctx,
     if (adapter_detect_lokr(st)) {
         ok = adapter_merge_lokr(wctx, gf, st, scale, backend);
     } else {
-        ok = adapter_merge_lora(wctx, gf, st, dir, scale, backend);
+        ok = adapter_merge_lora(wctx, gf, st, cfg_dir, scale, backend);
     }
 
     st_close(&st);
