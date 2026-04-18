@@ -1,10 +1,19 @@
 #pragma once
 // pipeline-synth.h: ACE-Step synthesis pipeline
 //
-// Loads lightweight modules (TextEnc + CondEnc + FSQ tok/detok + BPE) at init.
-// DiT and VAE decoder are loaded on demand via explicit phase calls, so the
-// caller can batch many jobs through the DiT while it is resident, then swap
-// it out and run all VAE decodes with the largest possible tiles.
+// Three module categories:
+//   Resident (loaded at init, kept for the pipeline's lifetime):
+//     TextEnc, CondEnc, FSQ tok, FSQ detok, BPE. All small (< 1 GB total).
+//   Ephemeral (loaded and freed inside a single op):
+//     VAE encoder. Used twice per job (source + timbre), always brief.
+//   Lazy-shared (loaded on first use, kept until the caller releases):
+//     DiT, VAE decoder. Large, reused across every group of a batch.
+//
+// The ops self-load their lazy-shared modules (via ace_synth_dit_load /
+// ace_synth_vae_load, both idempotent), so no module sits in VRAM outside
+// its exclusive usage window. The caller unloads a module once it is done
+// with it (typically: unload DiT between phase 1 and phase 2, unload the
+// VAE decoder after phase 2).
 
 #include "request.h"
 
@@ -36,27 +45,26 @@ struct AceAudio {
 
 void ace_synth_default_params(AceSynthParams * p);
 
-// Load lightweight modules (TextEnc, CondEnc, FSQ, BPE) and cache DiT metadata.
-// DiT weights and VAE weights are not allocated here.
+// Load the resident modules and cache DiT metadata. DiT and VAE weights are
+// not allocated here; they are brought in lazily by the ops that need them.
 // Returns NULL on failure.
 AceSynth * ace_synth_load(const AceSynthParams * params);
 
-// Bring the DiT into VRAM (with adapter merge if configured). Idempotent:
-// returns true if already loaded. Required before ace_synth_job_run_dit.
+// Lazy-shared module lifecycle. Both pairs are idempotent: load returns
+// true if the module is already resident, unload is a no-op if absent.
+// Normally called by the ops themselves; exposed for the orchestrator to
+// unload a module between phases (so the next phase sees the full VRAM).
 bool ace_synth_dit_load(AceSynth * ctx);
-
-// Release DiT VRAM. Idempotent. Safe to call while VAE is loaded.
 void ace_synth_dit_unload(AceSynth * ctx);
-
-// Bring the VAE decoder into VRAM. Idempotent: returns true if already loaded.
-// Required before ace_synth_job_run_vae. Returns false when no vae_path was set.
 bool ace_synth_vae_load(AceSynth * ctx);
-
-// Release VAE decoder VRAM. Idempotent.
 void ace_synth_vae_unload(AceSynth * ctx);
 
 // Phase 1: encode sources, build context, run all DiT denoising steps.
-// Requires the DiT loaded. VAE decoder may be unloaded at this point.
+// ops_dit_generate lazy-loads the DiT right before the denoising loop,
+// so VAE-encoder, text and cond passes run with no DiT in VRAM. After
+// the first group of a batch the DiT stays resident (load is idempotent)
+// and subsequent groups reuse it. Call ace_synth_dit_unload when the
+// batch is done.
 // Produces a job that carries DiT latents in RAM for later VAE decoding.
 // reqs[batch_n]: each request has its own caption, lyrics, metadata, audio_codes, and seed.
 //   The first request (reqs[0]) is used for shared params (mode, duration, DiT settings).
@@ -76,7 +84,9 @@ AceSynthJob * ace_synth_job_run_dit(AceSynth *         ctx,
                                     void * cancel_data     = nullptr);
 
 // Phase 2: VAE decode and waveform splice.
-// Requires the VAE decoder loaded. DiT may be unloaded at this point.
+// ops_vae_decode_and_splice lazy-loads the decoder on first use and leaves
+// it resident for the subsequent jobs of the same batch. Call
+// ace_synth_vae_unload when done.
 // splice_src / splice_len: interleaved stereo source reused for repaint/lego wave splicing.
 //   Pass NULL when the job did not carry a source audio.
 // out[batch_n] allocated by caller, filled with audio buffers.

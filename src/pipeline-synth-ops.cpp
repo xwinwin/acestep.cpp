@@ -42,7 +42,7 @@ static std::vector<int> parse_codes_string(const std::string & s) {
     return codes;
 }
 
-// ops_encode_src
+// Module: VAE encoder (ephemeral).
 int ops_encode_src(const AceSynth * ctx, const float * src_audio, int src_len, SynthState & s) {
     // Cover mode: load VAE encoder and encode source audio
     s.have_cover = false;
@@ -73,7 +73,6 @@ int ops_encode_src(const AceSynth * ctx, const float * src_audio, int src_len, S
     return 0;
 }
 
-// ops_fsq_roundtrip
 void ops_fsq_roundtrip(AceSynth * ctx, SynthState & s) {
     // FSQ roundtrip for cover: tokenize (25Hz->5Hz) + detokenize (5Hz->25Hz).
     // The lossy 5:1 temporal compression destroys micro-timings, ornaments and
@@ -102,7 +101,6 @@ void ops_fsq_roundtrip(AceSynth * ctx, SynthState & s) {
     }
 }
 
-// ops_resolve_params
 int ops_resolve_params(const AceSynth * ctx, const AceRequest * reqs, int batch_n, SynthState & s) {
     // Extract shared params from first request
     s.duration = s.rr.duration > 0 ? s.rr.duration : 30.0f;
@@ -160,7 +158,6 @@ int ops_resolve_params(const AceSynth * ctx, const AceRequest * reqs, int batch_
     return 0;
 }
 
-// ops_build_schedule
 void ops_build_schedule(SynthState & s) {
     // Build s.schedule: t_i = s.shift * t / (1 + (s.shift-1)*t) where t = 1 - i/steps
     s.schedule.resize(s.num_steps);
@@ -170,7 +167,6 @@ void ops_build_schedule(SynthState & s) {
     }
 }
 
-// ops_resolve_T
 int ops_resolve_T(const AceSynth * ctx, SynthState & s) {
     // s.T = number of 25Hz latent frames for DiT
     // Source tasks: from source audio. Codes: from code count. Else: from s.duration.
@@ -204,7 +200,7 @@ int ops_resolve_T(const AceSynth * ctx, SynthState & s) {
     return 0;
 }
 
-// ops_encode_timbre
+// Module: VAE encoder (ephemeral).
 void ops_encode_timbre(const AceSynth * ctx, const float * ref_audio, int ref_len, SynthState & s) {
     // Timbre features from ref_audio (independent of src_audio).
     // VAE-encode ref_audio and pass all frames to the timbre encoder.
@@ -234,7 +230,6 @@ void ops_encode_timbre(const AceSynth * ctx, const float * ref_audio, int ref_le
     }
 }
 
-// ops_encode_text
 int ops_encode_text(AceSynth * ctx, const AceRequest * reqs, int batch_n, SynthState & s) {
     // 3. Per-batch text encoding.
     // Each batch element gets its own caption, lyrics, and metadata encoded independently.
@@ -395,7 +390,6 @@ int ops_encode_text(AceSynth * ctx, const AceRequest * reqs, int batch_n, SynthS
     return 0;
 }
 
-// ops_build_context
 int ops_build_context(AceSynth * ctx, const AceRequest * reqs, int batch_n, SynthState & s) {
     // Build s.context: [batch_n, s.T, s.ctx_ch] = src_latents[64] + chunk_mask[64]
     // Cover/Lego/Repaint: shared s.context replicated (s.cover_latents from src_audio).
@@ -502,7 +496,6 @@ int ops_build_context(AceSynth * ctx, const AceRequest * reqs, int batch_n, Synt
     return 0;
 }
 
-// ops_build_context_silence
 void ops_build_context_silence(const AceSynth * ctx, int batch_n, SynthState & s) {
     // Cover mode: build silence s.context for audio_cover_strength switching
     // When step >= s.cover_steps, DiT switches from cover s.context to silence s.context
@@ -534,7 +527,6 @@ void ops_build_context_silence(const AceSynth * ctx, int batch_n, SynthState & s
     }
 }
 
-// ops_init_noise_and_repaint
 void ops_init_noise_and_repaint(const AceSynth * ctx, const AceRequest * reqs, int batch_n, SynthState & s) {
     // Generate N s.noise samples (Philox4x32-10, matches torch.randn on CUDA with bf16).
     // Each batch item uses its own seed from the request.
@@ -620,8 +612,11 @@ void ops_init_noise_and_repaint(const AceSynth * ctx, const AceRequest * reqs, i
     }
 }
 
-// ops_dit_generate
+// Module: DiT (lazy-shared).
 int ops_dit_generate(AceSynth * ctx, int batch_n, SynthState & s, bool (*cancel)(void *), void * cancel_data) {
+    if (!ace_synth_dit_load(ctx)) {
+        return -1;
+    }
     s.timer.reset();
     int dit_rc = dit_ggml_generate(
         &ctx->dit, s.noise.data(), s.context.data(), s.enc_hidden.data(), s.enc_S, s.T, batch_n, s.num_steps,
@@ -640,7 +635,7 @@ int ops_dit_generate(AceSynth * ctx, int batch_n, SynthState & s, bool (*cancel)
     return 0;
 }
 
-// ops_vae_decode_and_splice
+// Module: VAE decoder (lazy-shared).
 int ops_vae_decode_and_splice(AceSynth *    ctx,
                               int           batch_n,
                               AceAudio *    out,
@@ -649,6 +644,9 @@ int ops_vae_decode_and_splice(AceSynth *    ctx,
                               int           src_len,
                               bool (*cancel)(void *),
                               void * cancel_data) {
+    if (!ace_synth_vae_load(ctx)) {
+        return -1;
+    }
     int                T_latent    = s.T;
     int                T_audio_max = T_latent * 1920;
     std::vector<float> audio(2 * T_audio_max);

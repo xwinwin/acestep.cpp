@@ -274,10 +274,6 @@ AceSynthJob * ace_synth_job_run_dit(AceSynth *         ctx,
     if (!ctx || !reqs || batch_n < 1 || batch_n > 9) {
         return NULL;
     }
-    if (!ctx->have_dit) {
-        fprintf(stderr, "[Synth-Phase] FATAL: run_dit called without DiT loaded\n");
-        return NULL;
-    }
 
     AceSynthJob * job = new AceSynthJob();
     job->batch_n      = batch_n;
@@ -504,8 +500,9 @@ AceSynthJob * ace_synth_job_run_dit(AceSynth *         ctx,
     // Noise tensor (Philox), cover noise blend, per_S, repaint_src buffer
     ops_init_noise_and_repaint(ctx, reqs, batch_n, s);
 
-    // DiT denoising loop. Latents land in s.output and stay in job memory
-    // until phase 2 feeds them to the VAE decoder.
+    // DiT denoising loop. ops_dit_generate lazy-loads the DiT on first call;
+    // subsequent groups of the same batch reuse it. Latents land in s.output
+    // and stay in job memory until phase 2 feeds them to the VAE.
     if (ops_dit_generate(ctx, batch_n, s, cancel, cancel_data) != 0) {
         delete job;
         return NULL;
@@ -524,10 +521,6 @@ int ace_synth_job_run_vae(AceSynth *    ctx,
                           bool (*cancel)(void *),
                           void * cancel_data) {
     if (!ctx || !job || !out) {
-        return -1;
-    }
-    if (!ctx->have_vae) {
-        fprintf(stderr, "[Synth-Phase] FATAL: run_vae called without VAE loaded\n");
         return -1;
     }
 

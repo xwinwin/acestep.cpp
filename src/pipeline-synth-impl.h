@@ -35,7 +35,7 @@ struct AceSynth {
     TokGGML      tok;
     BPETokenizer bpe;
 
-    // On-demand modules (loaded via ace_synth_dit_load / ace_synth_vae_load)
+    // Lazy-shared modules (loaded via ace_synth_dit_load / ace_synth_vae_load)
     DiTGGML dit;
     VAEGGML vae;
     bool    have_dit;

@@ -1,14 +1,16 @@
 #pragma once
 // synth-batch-runner.h: two-phase orchestration shared by the synth binaries
 //
-// Runs phase 1 (DiT) on every group while the DiT is resident, unloads the
-// DiT, then runs phase 2 (VAE) on every job with the widest tiles the GPU
-// can hold. DiT and VAE loads are idempotent, so calling this repeatedly
-// with --keep-loaded paths simply reuses what is already in VRAM.
+// Phase 1 (all groups) runs ace_synth_job_run_dit; ops_dit_generate lazy-loads
+// the DiT on first call and subsequent groups reuse it. Once phase 1 is done
+// we unload the DiT so the decoder sees the full VRAM budget. Phase 2 (all
+// jobs) runs ace_synth_job_run_vae; ops_vae_decode_and_splice lazy-loads the
+// decoder on first use. No module sits in VRAM outside its exclusive usage
+// window.
 //
-// The helper does NOT unload at the end: the caller decides that based on
-// --keep-loaded and picks either ace_synth_free (drop everything) or just
-// letting the context live on for the next call.
+// The helper does not unload the VAE at the end: the caller decides based
+// on its own keep-loaded policy (ace_synth_free drops everything, a plain
+// return lets the next call reuse the decoder).
 
 #include "pipeline-synth.h"
 
@@ -39,11 +41,9 @@ static int synth_batch_run(AceSynth *                             ctx,
     std::vector<AceSynthJob *> jobs(n_groups, nullptr);
     std::vector<int>           audio_off(n_groups, 0);
 
-    // Phase 1: DiT resident, iterate all groups and carry latents in RAM.
-    if (!ace_synth_dit_load(ctx)) {
-        return -1;
-    }
-
+    // Phase 1: each run_dit lazy-loads the DiT right before the denoising
+    // loop. The VAE encoder, text encoder and cond encoder all run with no
+    // DiT in VRAM.
     int off = 0;
     for (int g = 0; g < n_groups; g++) {
         const int gn = (int) groups[g].size();
@@ -59,16 +59,10 @@ static int synth_batch_run(AceSynth *                             ctx,
         off += gn;
     }
 
-    // DiT out, VAE in: the decoder sees the full VRAM budget.
+    // Free the DiT so the decoder sees the full VRAM budget.
     ace_synth_dit_unload(ctx);
-    if (!ace_synth_vae_load(ctx)) {
-        for (int g = 0; g < n_groups; g++) {
-            ace_synth_job_free(jobs[g]);
-        }
-        return -1;
-    }
 
-    // Phase 2: VAE decode + splice on every job.
+    // Phase 2: each run_vae lazy-loads the decoder on first use.
     for (int g = 0; g < n_groups; g++) {
         const int rc =
             ace_synth_job_run_vae(ctx, jobs[g], src_audio, src_len, audio_out + audio_off[g], cancel, cancel_data);
