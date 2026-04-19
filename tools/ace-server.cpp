@@ -1145,6 +1145,11 @@ static void handle_props(const httplib::Request &, httplib::Response & res) {
 }
 
 static void usage(const char * prog) {
+    AceLmParams    lm_d;
+    AceSynthParams synth_d;
+    ace_lm_default_params(&lm_d);
+    ace_synth_default_params(&synth_d);
+
     fprintf(stderr, "acestep.cpp %s\n\n", ACE_VERSION);
     fprintf(stderr,
             "Usage: %s --models <dir> [options]\n"
@@ -1157,24 +1162,24 @@ static void usage(const char * prog) {
             "\n"
             "Memory control:\n"
             "  --keep-loaded           Keep models in VRAM between requests\n"
-            "  --vae-chunk <N>         Latent frames per tile (default: 256)\n"
-            "  --vae-overlap <N>       Overlap frames per side (default: 64)\n"
+            "  --vae-chunk <N>         Latent frames per tile (default: %d)\n"
+            "  --vae-overlap <N>       Overlap frames per side (default: %d)\n"
             "\n"
             "Output:\n"
-            "  --mp3-bitrate <kbps>    MP3 bitrate (default: 128)\n"
+            "  --mp3-bitrate <kbps>    MP3 bitrate (default: %d)\n"
             "\n"
             "Server:\n"
             "  --host <addr>           Listen address (default: 127.0.0.1)\n"
             "  --port <N>              Listen port (default: 8080)\n"
-            "  --max-batch <N>         LM batch limit (default: 1)\n"
-            "  --max-seq <N>           KV cache size (default: 8192)\n"
+            "  --max-batch <N>         LM batch limit (default: %d)\n"
+            "  --max-seq <N>           KV cache size (default: %d)\n"
             "\n"
             "Debug:\n"
             "  --no-fsm                Disable FSM constrained decoding\n"
             "  --no-fa                 Disable flash attention\n"
             "  --no-batch-cfg          Split CFG into two separate forwards (LM + DiT)\n"
             "  --clamp-fp16            Clamp hidden states to FP16 range\n",
-            prog);
+            prog, synth_d.vae_chunk, synth_d.vae_overlap, g_mp3_kbps, g_max_batch, lm_d.max_seq);
 }
 
 int main(int argc, char ** argv) {

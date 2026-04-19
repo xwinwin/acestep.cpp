@@ -26,7 +26,7 @@ void ace_synth_default_params(AceSynthParams * p) {
     p->use_fa            = true;
     p->clamp_fp16        = false;
     p->use_batch_cfg     = true;
-    p->vae_chunk         = 256;
+    p->vae_chunk         = 1024;
     p->vae_overlap       = 64;
     p->dump_dir          = NULL;
 }

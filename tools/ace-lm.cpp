@@ -13,6 +13,9 @@
 #include <vector>
 
 static void usage(const char * prog) {
+    AceLmParams d;
+    ace_lm_default_params(&d);
+
     fprintf(stderr, "acestep.cpp %s\n\n", ACE_VERSION);
     fprintf(stderr,
             "Usage: %s --request <json> --lm <gguf> [options]\n"
@@ -22,14 +25,14 @@ static void usage(const char * prog) {
             "  --lm <gguf>            5Hz LM GGUF file\n"
             "\n"
             "Debug:\n"
-            "  --max-seq <N>          KV cache size (default: 8192)\n"
+            "  --max-seq <N>          KV cache size (default: %d)\n"
             "  --no-fsm               Disable FSM constrained decoding\n"
             "  --no-fa                Disable flash attention\n"
             "  --no-batch-cfg         Split CFG into two separate forwards\n"
             "  --clamp-fp16           Clamp hidden states to FP16 range\n"
             "  --dump-logits <path>   Dump prefill logits (binary f32)\n"
             "  --dump-tokens <path>   Dump prompt token IDs (CSV)\n",
-            prog);
+            prog, d.max_seq);
 }
 
 int main(int argc, char ** argv) {

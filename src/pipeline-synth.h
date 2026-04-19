@@ -21,12 +21,12 @@ struct AceSynthParams {
     const char * dit_path;           // DiT GGUF (required)
     const char * vae_path;           // VAE GGUF (required)
     const char * adapter_path;       // adapter safetensors or directory (NULL to disable)
-    float        adapter_scale;      // user scale multiplier, 1.0 by default
-    bool         use_fa;             // flash attention (default: true)
-    bool         clamp_fp16;         // clamp hidden states to FP16 range (default: false)
-    bool         use_batch_cfg;      // batch cond+uncond in one DiT forward (default: true)
-    int          vae_chunk;          // latent frames per tile (default: 256)
-    int          vae_overlap;        // overlap frames per side (default: 64)
+    float        adapter_scale;      // user scale multiplier
+    bool         use_fa;             // flash attention
+    bool         clamp_fp16;         // clamp hidden states to FP16 range
+    bool         use_batch_cfg;      // batch cond+uncond in one DiT forward
+    int          vae_chunk;          // latent frames per tile
+    int          vae_overlap;        // overlap frames per side
     const char * dump_dir;           // intermediate tensor dump dir (NULL = disabled)
 };
 

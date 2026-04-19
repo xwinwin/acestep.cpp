@@ -332,8 +332,8 @@ static int scenario_integration(const char * lm_path) {
     ace_understand_default_params(&und_p);
     und_p.model_path = lm_path;
     // Replicate ace-server main() propagation. Every LM-key field must land here.
-    und_p.max_seq   = lm_p.max_seq;
-    und_p.max_batch = lm_p.max_batch;
+    und_p.max_seq    = lm_p.max_seq;
+    und_p.max_batch  = lm_p.max_batch;
 
     AceLm * lm = ace_lm_load(s, &lm_p);
     if (!lm) {

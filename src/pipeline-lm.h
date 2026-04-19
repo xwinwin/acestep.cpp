@@ -13,12 +13,12 @@ struct ModelStore;
 
 struct AceLmParams {
     const char * model_path;     // LM GGUF (required)
-    int          max_seq;        // KV cache length (default: 8192)
-    int          max_batch;      // max lm_batch_size for generate (default: 4)
-    bool         use_fsm;        // constrained decoding (default: true)
-    bool         use_fa;         // flash attention (default: true)
-    bool         use_batch_cfg;  // batch cond+uncond in one forward (default: true)
-    bool         clamp_fp16;     // clamp hidden states to FP16 range (default: false)
+    int          max_seq;        // KV cache length
+    int          max_batch;      // max lm_batch_size for generate
+    bool         use_fsm;        // constrained decoding
+    bool         use_fa;         // flash attention
+    bool         use_batch_cfg;  // batch cond+uncond in one forward
+    bool         clamp_fp16;     // clamp hidden states to FP16 range
 };
 
 void ace_lm_default_params(AceLmParams * p);

@@ -721,7 +721,7 @@ Base/SFT preset: `inference_steps=50, guidance_scale=1.0, shift=1.0`.
 ## ace-lm reference
 
 ```
-Usage: ace-lm --request <json> --lm <gguf> [options]
+Usage: ./ace-lm --request <json> --lm <gguf> [options]
 
 Required:
   --request <json>       Input request JSON
@@ -745,7 +745,7 @@ Model weights are read once per decode step for all N sequences.
 ## ace-synth reference
 
 ```
-Usage: ace-synth --request <json...> --embedding <gguf> --dit <gguf> --vae <gguf> [options]
+Usage: ./ace-synth --request <json...> --embedding <gguf> --dit <gguf> --vae <gguf> [options]
 
 Required:
   --request <json...>     One or more request JSONs (from ace-lm --request)
@@ -766,7 +766,7 @@ Output:
   --mp3-bitrate <kbps>    MP3 bitrate (default: 128)
 
 Memory control:
-  --vae-chunk <N>         Latent frames per tile (default: 256)
+  --vae-chunk <N>         Latent frames per tile (default: 1024)
   --vae-overlap <N>       Overlap frames per side (default: 64)
 
 Debug:
@@ -836,9 +836,9 @@ quantisation raise both columns.
 | Synth | Qwen3 text-enc, cond-enc, DiT, VAE enc, VAE dec, FSQ tok/detok | ~2-3 GB (DiT or VAE tiles) | ~3-4 GB + tiles |
 | Understand | Qwen3 LM, VAE enc, FSQ tok | ~2-3 GB (LM or VAE tiles) | ~2-3 GB + tiles |
 
-VAE tile activations scale with `--vae-chunk` and `--vae-overlap`. The
-defaults of 256 / 64 latent frames account for roughly a gigabyte of
-transient buffers during encode or decode, less with smaller chunks.
+VAE tile activations scale with `--vae-chunk` and `--vae-overlap`. Bigger
+tiles process audio faster with fewer seams but cost more transient VRAM
+during encode or decode; the project default targets 8 GB consumer cards.
 Under STRICT those tiles get the full GPU budget alone; under
 `--keep-loaded` they sit on top of everything else, so larger cards
 earn back the latency they spend reloading.
@@ -846,7 +846,7 @@ earn back the latency they spend reloading.
 Endpoints whose pipeline has no models in the registry return 501.
 
 ```
-Usage: ace-server --models <dir> [options]
+Usage: ./ace-server --models <dir> [options]
 
 Required:
   --models <dir>          Directory of GGUF model files
@@ -856,7 +856,7 @@ Adapter:
 
 Memory control:
   --keep-loaded           Keep models in VRAM between requests
-  --vae-chunk <N>         Latent frames per tile (default: 256)
+  --vae-chunk <N>         Latent frames per tile (default: 1024)
   --vae-overlap <N>       Overlap frames per side (default: 64)
 
 Output:
@@ -982,7 +982,7 @@ decode roundtrip), and compressing music at 6.8 kbit/s with no perceptible
 difference from the original.
 
 ```
-Usage: neural-codec --vae <gguf> --encode|--decode -i <input> [-o <o>] [--q8|--q4]
+Usage: ./neural-codec --vae <gguf> --encode|--decode -i <input> [-o <output>] [--q8|--q4]
 
 Required:
   --vae <path>            VAE GGUF file
@@ -999,7 +999,7 @@ Output naming: song.wav -> song.latent (f32) or song.nac8 (Q8) or song.nac4 (Q4)
                song.latent -> song.wav
 
 Memory control:
-  --vae-chunk <N>         Latent frames per tile (default: 256)
+  --vae-chunk <N>         Latent frames per tile (default: 1024)
   --vae-overlap <N>       Overlap frames per side (default: 64)
 
 Latent formats (decode auto-detects):
@@ -1048,7 +1048,7 @@ uses minimp3 (CC0). Reads WAV or MP3, writes WAV or MP3 (auto-detected
 from output extension).
 
 ```
-Usage: mp3-codec -i <input> -o <o> [options]
+Usage: ./mp3-codec -i <input> -o <o> [options]
 
   -i <path>     Input file (WAV or MP3)
   -o <path>     Output file (WAV or MP3)
@@ -1058,10 +1058,10 @@ Usage: mp3-codec -i <input> -o <o> [options]
 Mode is auto-detected from output extension.
 
 Examples:
-  mp3-codec -i song.wav -o song.mp3
-  mp3-codec -i song.wav -o song.mp3 -b 192
-  mp3-codec -i song.mp3 -o song.wav
-  mp3-codec -i song.mp3 -o song.wav --format wav32
+  ./mp3-codec -i song.wav -o song.mp3
+  ./mp3-codec -i song.wav -o song.mp3 -b 192
+  ./mp3-codec -i song.mp3 -o song.wav
+  ./mp3-codec -i song.mp3 -o song.wav --format wav32
 ```
 
 ## ace-understand reference
@@ -1073,7 +1073,7 @@ Two input modes: `--src-audio` runs the full chain (VAE encode + FSQ tokenize +
 LM), `--request` with an `audio_codes` field skips straight to the LM.
 
 ```
-Usage: ace-understand [--src-audio <file> --dit <gguf> --vae <gguf> | --request <json>] --lm <gguf>
+Usage: ./ace-understand [--src-audio <file> --dit <gguf> --vae <gguf> | --request <json>] --lm <gguf>
 
 Audio input (full pipeline):
   --src-audio <file>      Source audio (WAV or MP3, any sample rate)
@@ -1094,7 +1094,7 @@ request JSON. Without --request, understand defaults apply
 (temperature=0.3, top_p disabled).
 
 Memory control:
-  --vae-chunk <N>         Latent frames per tile (default: 256)
+  --vae-chunk <N>         Latent frames per tile (default: 1024)
   --vae-overlap <N>       Overlap frames per side (default: 64)
 
 Debug:

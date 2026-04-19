@@ -21,6 +21,9 @@
 #include <string>
 
 static void usage(const char * prog) {
+    AceUnderstandParams d;
+    ace_understand_default_params(&d);
+
     fprintf(stderr, "acestep.cpp %s\n\n", ACE_VERSION);
     fprintf(stderr,
             "Usage: %s [--src-audio <file> --dit <gguf> --vae <gguf> | --request <json>] --lm <gguf>\n"
@@ -44,15 +47,15 @@ static void usage(const char * prog) {
             "(temperature=0.3, top_p disabled).\n"
             "\n"
             "Memory control:\n"
-            "  --vae-chunk <N>         Latent frames per tile (default: 256)\n"
-            "  --vae-overlap <N>       Overlap frames per side (default: 64)\n"
+            "  --vae-chunk <N>         Latent frames per tile (default: %d)\n"
+            "  --vae-overlap <N>       Overlap frames per side (default: %d)\n"
             "\n"
             "Debug:\n"
-            "  --max-seq <N>           KV cache size (default: 8192)\n"
+            "  --max-seq <N>           KV cache size (default: %d)\n"
             "  --no-fsm                Disable FSM constrained decoding\n"
             "  --no-fa                 Disable flash attention\n"
             "  --dump <dir>            Dump tok_latents + tok_codes (skip LM)\n",
-            prog);
+            prog, d.vae_chunk, d.vae_overlap, d.max_seq);
 }
 
 int main(int argc, char ** argv) {

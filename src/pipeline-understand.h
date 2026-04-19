@@ -15,13 +15,13 @@ struct AceUnderstandParams {
     const char * dit_path;     // DiT GGUF (required for audio input, has FSQ codebook)
     const char * vae_path;     // VAE GGUF (required for audio input, has encoder)
     const char * dump_dir;     // dump tok_latents + tok_codes (NULL = disabled)
-    int          max_seq;      // KV cache length (default: 8192)
+    int          max_seq;      // KV cache length
     int          max_batch;    // must match ace_lm max_batch so the LM ModelKey is identical
-                               // and the two pipelines share one LM instance (default: 1)
-    bool         use_fsm;      // constrained decoding (default: true)
-    bool         use_fa;       // flash attention (default: true)
-    int          vae_chunk;    // latent frames per tile (default: 256)
-    int          vae_overlap;  // overlap frames per side (default: 64)
+                               // and the two pipelines share one LM instance
+    bool         use_fsm;      // constrained decoding
+    bool         use_fa;       // flash attention
+    int          vae_chunk;    // latent frames per tile
+    int          vae_overlap;  // overlap frames per side
 };
 
 void ace_understand_default_params(AceUnderstandParams * p);

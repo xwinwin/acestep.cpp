@@ -16,6 +16,9 @@
 #include <vector>
 
 static void usage(const char * prog) {
+    AceSynthParams d;
+    ace_synth_default_params(&d);
+
     fprintf(stderr, "acestep.cpp %s\n\n", ACE_VERSION);
     fprintf(stderr,
             "Usage: %s --request <json...> --embedding <gguf> --dit <gguf> --vae <gguf> [options]\n\n"
@@ -34,14 +37,14 @@ static void usage(const char * prog) {
             "  --format <fmt>          Output format: mp3, wav16, wav24, wav32 (default: mp3)\n"
             "  --mp3-bitrate <kbps>    MP3 bitrate (default: 128)\n\n"
             "Memory control:\n"
-            "  --vae-chunk <N>         Latent frames per tile (default: 256)\n"
-            "  --vae-overlap <N>       Overlap frames per side (default: 64)\n\n"
+            "  --vae-chunk <N>         Latent frames per tile (default: %d)\n"
+            "  --vae-overlap <N>       Overlap frames per side (default: %d)\n\n"
             "Debug:\n"
             "  --no-fa                 Disable flash attention\n"
             "  --no-batch-cfg          Split DiT CFG into two separate forwards\n"
             "  --clamp-fp16            Clamp hidden states to FP16 range\n"
             "  --dump <dir>            Dump intermediate tensors\n",
-            prog);
+            prog, d.vae_chunk, d.vae_overlap);
 }
 
 int main(int argc, char ** argv) {
@@ -49,6 +52,11 @@ int main(int argc, char ** argv) {
         usage(argv[0]);
         return 1;
     }
+
+    // Defaults live in ace_synth_default_params. CLI locals read from params
+    // so there is exactly one place in the codebase that picks the numbers.
+    AceSynthParams params;
+    ace_synth_default_params(&params);
 
     std::vector<const char *> request_paths;
     const char *              text_enc_gguf  = NULL;
@@ -62,8 +70,8 @@ int main(int argc, char ** argv) {
     bool                      use_fa         = true;
     bool                      use_batch_cfg  = true;
     bool                      clamp_fp16     = false;
-    int                       vae_chunk      = 256;
-    int                       vae_overlap    = 64;
+    int                       vae_chunk      = params.vae_chunk;
+    int                       vae_overlap    = params.vae_overlap;
     bool                      is_mp3         = true;
     WavFormat                 wav_fmt        = WAV_S16;
     int                       mp3_kbps       = 128;
@@ -139,9 +147,7 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    // Load models
-    AceSynthParams params;
-    ace_synth_default_params(&params);
+    // Fill params from CLI flags.
     params.text_encoder_path = text_enc_gguf;
     params.dit_path          = dit_gguf;
     params.vae_path          = vae_gguf;

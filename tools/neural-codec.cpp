@@ -320,7 +320,7 @@ static void print_usage(const char * prog) {
             "Output naming: song.wav -> song.latent (f32) or song.nac8 (Q8) or song.nac4 (Q4)\n"
             "               song.latent -> song.wav\n\n"
             "Memory control:\n"
-            "  --vae-chunk <N>         Latent frames per tile (default: 256)\n"
+            "  --vae-chunk <N>         Latent frames per tile (default: 1024)\n"
             "  --vae-overlap <N>       Overlap frames per side (default: 64)\n\n"
             "Latent formats (decode auto-detects):\n"
             "  f32:  flat [T, 64] f32, no header. ~51 kbit/s.\n"
@@ -342,7 +342,7 @@ int main(int argc, char ** argv) {
     const char * vae_path    = NULL;
     const char * input_path  = NULL;
     const char * output_path = NULL;
-    int          chunk_size  = 256;
+    int          chunk_size  = 1024;
     int          overlap     = 64;
     int          mode        = -1;  // 0 = encode, 1 = decode
     int          quant       = 0;   // 0 = f32, 8 = q8, 4 = q4

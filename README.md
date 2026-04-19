@@ -81,13 +81,33 @@ Supports LoRA today in two flavours: PEFT directories (with
 ## Server options
 
 ```
---models <dir>       Model directory (required)
---adapters <dir>     Adapter directory (LoRA today, LoKr soon)
---host <addr>        Listen address (default: 127.0.0.1)
---port <N>           Listen port (default: 8080)
---max-batch <N>      LM batch limit 1-9 (default: 1)
---vae-chunk <N>      VAE tile size (default: 256, lower = less VRAM)
---mp3-bitrate <N>    MP3 kbps (default: 128)
+Usage: ./ace-server --models <dir> [options]
+
+Required:
+  --models <dir>          Directory of GGUF model files
+
+Adapter:
+  --adapters <dir>        Directory of adapters
+
+Memory control:
+  --keep-loaded           Keep models in VRAM between requests
+  --vae-chunk <N>         Latent frames per tile (default: 1024)
+  --vae-overlap <N>       Overlap frames per side (default: 64)
+
+Output:
+  --mp3-bitrate <kbps>    MP3 bitrate (default: 128)
+
+Server:
+  --host <addr>           Listen address (default: 127.0.0.1)
+  --port <N>              Listen port (default: 8080)
+  --max-batch <N>         LM batch limit (default: 1)
+  --max-seq <N>           KV cache size (default: 8192)
+
+Debug:
+  --no-fsm                Disable FSM constrained decoding
+  --no-fa                 Disable flash attention
+  --no-batch-cfg          Split CFG into two separate forwards (LM + DiT)
+  --clamp-fp16            Clamp hidden states to FP16 range
 ```
 
 <details>

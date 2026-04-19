@@ -543,7 +543,7 @@ static std::vector<std::string> run_phase2_batch(Qwen3LM *                      
 void ace_lm_default_params(AceLmParams * p) {
     p->model_path    = NULL;
     p->max_seq       = 8192;
-    p->max_batch     = 4;
+    p->max_batch     = 1;
     p->use_fsm       = true;
     p->use_fa        = true;
     p->use_batch_cfg = true;
