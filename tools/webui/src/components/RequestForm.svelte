@@ -16,12 +16,19 @@
 	} from '../lib/api.js';
 	import { putSong, getAllSongs, saveJob, loadJob, loadJobId, clearJob } from '../lib/db.js';
 	import {
+		TASK_TEXT2MUSIC,
 		TASK_COVER,
 		TASK_COVER_NOFSQ,
 		TASK_REPAINT,
 		TASK_LEGO,
 		TASK_EXTRACT,
 		TASK_COMPLETE,
+		INFER_ODE,
+		INFER_SDE,
+		DCW_MODE_LOW,
+		DCW_MODE_HIGH,
+		DCW_MODE_DOUBLE,
+		DCW_MODE_PIX,
 		TRACK_NAMES
 	} from '../lib/config.js';
 	import {
@@ -64,6 +71,15 @@
 		if (app.request.lm_batch_size == null) app.request.lm_batch_size = d.lm_batch_size;
 		if (app.request.synth_batch_size == null) app.request.synth_batch_size = d.synth_batch_size;
 		if (app.request.peak_clip == null) app.request.peak_clip = d.peak_clip;
+		// enum fields: a missing value would leave <select> showing the first
+		// option without syncing it back to state. Inject server defaults so
+		// the dropdown and the request stay in sync from the first render.
+		if (app.request.task_type == null || app.request.task_type === '')
+			app.request.task_type = d.task_type;
+		if (app.request.infer_method == null || app.request.infer_method === '')
+			app.request.infer_method = d.infer_method;
+		if (app.request.dcw_mode == null || app.request.dcw_mode === '')
+			app.request.dcw_mode = d.dcw_mode;
 	});
 
 	// DiT input indicators
@@ -742,13 +758,13 @@
 						app.request.task_type = e.currentTarget.value;
 					}}
 				>
-					<option value="">text2music</option>
-					<option value={TASK_COVER}>cover</option>
-					<option value={TASK_COVER_NOFSQ}>cover-nofsq</option>
-					<option value={TASK_REPAINT}>repaint</option>
-					<option value={TASK_LEGO}>lego</option>
-					<option value={TASK_EXTRACT}>extract</option>
-					<option value={TASK_COMPLETE}>complete</option>
+					<option value={TASK_TEXT2MUSIC}>Text2Music: from prompt and LM codes</option>
+					<option value={TASK_COVER}>Cover: reinterpret in a new style</option>
+					<option value={TASK_COVER_NOFSQ}>Cover (no FSQ): closer to the original</option>
+					<option value={TASK_REPAINT}>Repaint: regenerate a region</option>
+					<option value={TASK_LEGO}>Lego: add a stem over backing audio</option>
+					<option value={TASK_EXTRACT}>Extract: isolate one stem from a mix</option>
+					<option value={TASK_COMPLETE}>Complete: auto-arrange around a partial track</option>
 				</select>
 			</div>
 			<div class="model-row track-row">
@@ -809,10 +825,10 @@
 							app.request.dcw_mode = e.currentTarget.value;
 						}}
 					>
-						<option value="">Low</option>
-						<option value="high">High</option>
-						<option value="double">Double</option>
-						<option value="pix">Pix</option>
+						<option value={DCW_MODE_LOW}>Low</option>
+						<option value={DCW_MODE_HIGH}>High</option>
+						<option value={DCW_MODE_DOUBLE}>Double</option>
+						<option value={DCW_MODE_PIX}>Pix</option>
 					</select></label
 				>
 				<label
@@ -873,8 +889,8 @@
 							app.request.infer_method = e.currentTarget.value;
 						}}
 					>
-						<option value="">ODE Euler</option>
-						<option value="sde">SDE Stochastic</option>
+						<option value={INFER_ODE}>ODE Euler</option>
+						<option value={INFER_SDE}>SDE Stochastic</option>
 					</select></label
 				>
 				<label
