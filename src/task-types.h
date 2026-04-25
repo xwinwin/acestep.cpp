@@ -15,6 +15,31 @@ inline constexpr const char * TASK_LEGO        = "lego";
 inline constexpr const char * TASK_EXTRACT     = "extract";
 inline constexpr const char * TASK_COMPLETE    = "complete";
 
+// inference method identifiers (DiT diffusion solver)
+inline constexpr const char * INFER_ODE = "ode";
+inline constexpr const char * INFER_SDE = "sde";
+
+// DCW mode identifiers (Differential Correction in Wavelet domain).
+// "low":    correct low-frequency sub-band only.
+// "high":   correct high-frequency sub-band only.
+// "double": correct both bands with independent scalers.
+// "pix":    no wavelet transform, pixel/latent-space correction.
+inline constexpr const char * DCW_MODE_LOW    = "low";
+inline constexpr const char * DCW_MODE_HIGH   = "high";
+inline constexpr const char * DCW_MODE_DOUBLE = "double";
+inline constexpr const char * DCW_MODE_PIX    = "pix";
+
+// LM generation mode names (JSON field lm_mode)
+inline constexpr const char * LM_MODE_NAME_GENERATE = "generate";
+inline constexpr const char * LM_MODE_NAME_INSPIRE  = "inspire";
+inline constexpr const char * LM_MODE_NAME_FORMAT   = "format";
+
+// Audio output format names (JSON field output_format)
+inline constexpr const char * OUTPUT_FORMAT_MP3   = "mp3";
+inline constexpr const char * OUTPUT_FORMAT_WAV16 = "wav16";
+inline constexpr const char * OUTPUT_FORMAT_WAV24 = "wav24";
+inline constexpr const char * OUTPUT_FORMAT_WAV32 = "wav32";
+
 // LM system instruction (Composer Agent: text -> metadata + audio codes)
 inline constexpr const char * LM_INSTRUCTION = "Generate audio semantic tokens based on the given conditions:";
 

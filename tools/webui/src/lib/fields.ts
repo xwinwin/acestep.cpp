@@ -6,7 +6,14 @@
 
 import type { AceRequest } from './types.js';
 
-export type FieldSection = 'content' | 'metadata' | 'lm' | 'flow' | 'toolbar' | 'routing';
+export type FieldSection =
+	| 'content'
+	| 'metadata'
+	| 'lm'
+	| 'flow'
+	| 'advanced'
+	| 'toolbar'
+	| 'routing';
 
 interface FieldDef {
 	key: keyof AceRequest;
@@ -36,6 +43,7 @@ export const FIELDS: readonly FieldDef[] = [
 	{ key: 'lm_top_p', section: 'lm', type: 'num' },
 	{ key: 'lm_top_k', section: 'lm', type: 'num' },
 	{ key: 'lm_negative_prompt', section: 'lm', type: 'str' },
+	{ key: 'lm_seed', section: 'metadata', type: 'num' },
 
 	// flow matching: cleared by Clear flow matching, preserved across Compose
 	{ key: 'inference_steps', section: 'flow', type: 'num' },
@@ -43,23 +51,32 @@ export const FIELDS: readonly FieldDef[] = [
 	{ key: 'shift', section: 'flow', type: 'num' },
 	{ key: 'audio_cover_strength', section: 'flow', type: 'num' },
 	{ key: 'cover_noise_strength', section: 'flow', type: 'num' },
-	{ key: 'repaint_strength', section: 'flow', type: 'num' },
 	{ key: 'repainting_start', section: 'flow', type: 'num' },
 	{ key: 'repainting_end', section: 'flow', type: 'num' },
-	{ key: 'infer_method', section: 'flow', type: 'str' },
 	{ key: 'seed', section: 'flow', type: 'num' },
+
+	// advanced and post-processing: cleared by its own Clear, preserved across Compose
+	{ key: 'custom_timesteps', section: 'advanced', type: 'str' },
+	{ key: 'dcw_mode', section: 'advanced', type: 'str' },
+	{ key: 'dcw_scaler', section: 'advanced', type: 'num' },
+	{ key: 'dcw_high_scaler', section: 'advanced', type: 'num' },
+	{ key: 'infer_method', section: 'advanced', type: 'str' },
+	{ key: 'latent_shift', section: 'advanced', type: 'num' },
+	{ key: 'latent_rescale', section: 'advanced', type: 'num' },
+	{ key: 'peak_clip', section: 'advanced', type: 'num' },
+	{ key: 'mp3_bitrate', section: 'advanced', type: 'num', min: 1 },
 
 	// toolbar: preserved, not in any clear section
 	{ key: 'synth_batch_size', section: 'toolbar', type: 'num', min: 1 },
-	{ key: 'peak_clip', section: 'toolbar', type: 'num' },
 
 	// routing: model and task selection, preserved across Compose
 	{ key: 'task_type', section: 'routing', type: 'str' },
 	{ key: 'track', section: 'routing', type: 'str' },
 	{ key: 'synth_model', section: 'routing', type: 'str' },
 	{ key: 'lm_model', section: 'routing', type: 'str' },
-	{ key: 'lora', section: 'routing', type: 'str' },
-	{ key: 'lora_scale', section: 'routing', type: 'num' }
+	{ key: 'adapter', section: 'routing', type: 'str' },
+	{ key: 'adapter_scale', section: 'routing', type: 'num' },
+	{ key: 'vae', section: 'routing', type: 'str' }
 ];
 
 // convert to number, undefined if empty/NaN
@@ -89,7 +106,7 @@ function resolveField(f: FieldDef, raw: unknown): unknown {
 }
 
 // serialize non-empty fields for JSON export.
-// caller injects srcRange (repainting_start/end) and validates lora.
+// caller injects srcRange (repainting_start/end) and validates adapter.
 export function buildSparse(r: AceRequest): AceRequest {
 	const out: AceRequest = { caption: String(r.caption || '') };
 	for (const f of FIELDS) {

@@ -42,8 +42,10 @@
 	let d = $derived(app.props?.default);
 	let ditModels = $derived(app.props?.models.dit ?? []);
 	let lmModels = $derived(app.props?.models.lm ?? []);
-	let loraList = $derived(app.props?.loras ?? []);
-	let loraStale = $derived(!!app.request.lora && !loraList.includes(String(app.request.lora)));
+	let adapterList = $derived(app.props?.adapters ?? []);
+	let adapterStale = $derived(
+		!!app.request.adapter && !adapterList.includes(String(app.request.adapter))
+	);
 	let taskType = $derived(app.request.task_type || '');
 	let dp = $derived(
 		app.props?.presets
@@ -162,7 +164,7 @@
 				.then(async (blobs) => {
 					clearJob('synth');
 					const now = Date.now();
-					for (let i = blobs.length - 1; i >= 0; i--) {
+					for (let i = blobs.audios.length - 1; i >= 0; i--) {
 						const t = synthJob.tracks[i] || {
 							caption: '',
 							seed: 0,
@@ -179,7 +181,7 @@
 							seed: t.seed,
 							duration: t.duration,
 							request: t.request,
-							audio: blobs[i]
+							audio: blobs.audios[i]
 						};
 						await putSong(song);
 					}
@@ -279,7 +281,7 @@
 	// bind:value guarantees app.request always matches the DOM.
 	function buildRequest(): AceRequest {
 		const out = buildSparse(app.request);
-		if (out.lora && !loraList.includes(String(out.lora))) delete out.lora;
+		if (out.adapter && !adapterList.includes(String(out.adapter))) delete out.adapter;
 		return out;
 	}
 
@@ -370,7 +372,8 @@
 			// seed and synth_batch_size are per-expansion, handled below
 			delete synthParams.seed;
 			delete synthParams.synth_batch_size;
-			if (synthParams.lora && !loraList.includes(String(synthParams.lora))) delete synthParams.lora;
+			if (synthParams.adapter && !adapterList.includes(String(synthParams.adapter)))
+				delete synthParams.adapter;
 
 			// resolve seeds, build server payload and local expanded list for SongCard mapping.
 			// server receives synth_batch_size and expands internally (groups by T for GPU batch).
@@ -402,7 +405,9 @@
 					? await synthSubmitWithAudio(
 							toSend,
 							srcSong?.audio ?? null,
+							null,
 							refSong?.audio ?? null,
+							null,
 							app.format
 						)
 					: await synthSubmit(toSend, app.format);
@@ -425,7 +430,7 @@
 
 			const now = Date.now();
 
-			for (let i = blobs.length - 1; i >= 0; i--) {
+			for (let i = blobs.audios.length - 1; i >= 0; i--) {
 				const r = expanded[i];
 				const task = r.task_type || 'text2music';
 				const suffix = [variant, task].filter((s) => s).join(' ');
@@ -437,7 +442,7 @@
 					seed: r.seed || 0,
 					duration: r.duration || 0,
 					request: r,
-					audio: blobs[i]
+					audio: blobs.audios[i]
 				} as Song;
 				song.id = await putSong(song);
 				app.songs.unshift(song);
@@ -510,12 +515,12 @@
 			</div>
 			<div class="model-row">
 				<span class="model-label">LoRA</span>
-				<select bind:value={app.request.lora} title={t('tooltipLora')}>
+				<select bind:value={app.request.adapter} title={t('tooltipLora')}>
 					<option value="">{t('disabled')}</option>
-					{#if loraStale}
-						<option value={app.request.lora} disabled>{app.request.lora}</option>
+					{#if adapterStale}
+						<option value={app.request.adapter} disabled>{app.request.adapter}</option>
 					{/if}
-					{#each loraList as name}
+					{#each adapterList as name}
 						<option value={name}>{name}</option>
 					{/each}
 				</select>
@@ -523,7 +528,7 @@
 					type="text"
 					class="batch-input"
 					placeholder="1.0"
-					bind:value={app.request.lora_scale}
+					bind:value={app.request.adapter_scale}
 					title={t('tooltipLoraScale')}
 				/>
 			</div>
@@ -774,8 +779,8 @@
 					>{t('repaintStrength')}
 					<input
 						type="text"
-						placeholder={ph(d?.repaint_strength)}
-						bind:value={app.request.repaint_strength}
+						placeholder={ph(d?.audio_cover_strength)}
+						bind:value={app.request.audio_cover_strength}
 					/></label
 				>
 				<label

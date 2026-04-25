@@ -20,7 +20,7 @@ function load(): Saved {
 			return {
 				name: parsed.name || '',
 				volume: parsed.volume ?? 0.5,
-				format: parsed.format === 'wav' ? 'wav' : 'mp3',
+				format: ['mp3', 'wav16', 'wav24', 'wav32'].includes(parsed.format) ? parsed.format : 'mp3',
 				dark: parsed.dark ?? true,
 				logsOpen: parsed.logsOpen ?? true,
 				lang: parsed.lang || 'en',
@@ -79,8 +79,9 @@ export function toast(msg: string, ms = 4000, ok = false) {
 export function setRequest(incoming: AceRequest) {
 	if (!incoming.synth_model) incoming.synth_model = app.request.synth_model;
 	if (!incoming.lm_model) incoming.lm_model = app.request.lm_model;
-	if (!incoming.lora) incoming.lora = app.request.lora;
-	if (incoming.lora_scale == null) incoming.lora_scale = app.request.lora_scale;
+	if (!incoming.adapter) incoming.adapter = app.request.adapter;
+	if (incoming.adapter_scale == null) incoming.adapter_scale = app.request.adapter_scale;
+	if (!incoming.vae) incoming.vae = app.request.vae;
 	app.request = incoming;
 	app.srcRangeStart = incoming.repainting_start ?? null;
 	app.srcRangeEnd = incoming.repainting_end ?? null;

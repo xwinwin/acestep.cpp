@@ -1,25 +1,32 @@
 #pragma once
 // pipeline-synth.h: ACE-Step synthesis pipeline
 //
-// Loads DiT + TextEncoder + CondEncoder + VAE once, then generates audio
-// from enriched requests (output of pipeline-lm or pre-filled JSON).
+// A lightweight context bound to a ModelStore. The pipeline holds no GPU
+// modules: each op (text encoding, cond encoding, FSQ roundtrip, DiT denoise,
+// VAE decode) acquires its own modules from the store with RAII release.
+// STRICT policy keeps at most one module resident at a time. NEVER policy
+// caches everything across calls. DiT weight swap between phases is an
+// invisible consequence of the store, not an orchestration concern anymore.
 
 #include "request.h"
 
 #include <cstdlib>
 
 struct AceSynth;
+struct AceSynthJob;
+struct ModelStore;
 
 struct AceSynthParams {
     const char * text_encoder_path;  // Qwen3 text encoder GGUF (required)
     const char * dit_path;           // DiT GGUF (required)
-    const char * vae_path;           // VAE GGUF (NULL = no audio decode, latent only)
-    const char * lora_path;          // LoRA adapter path (NULL = no lora)
-    float        lora_scale;         // 1.0
-    bool         use_fa;             // flash attention (default: true)
-    bool         clamp_fp16;         // clamp hidden states to FP16 range (default: false)
-    int          vae_chunk;          // latent frames per tile (default: 256)
-    int          vae_overlap;        // overlap frames per side (default: 64)
+    const char * vae_path;           // VAE GGUF (required)
+    const char * adapter_path;       // adapter safetensors or directory (NULL to disable)
+    float        adapter_scale;      // user scale multiplier
+    bool         use_fa;             // flash attention
+    bool         clamp_fp16;         // clamp hidden states to FP16 range
+    bool         use_batch_cfg;      // batch cond+uncond in one DiT forward
+    int          vae_chunk;          // latent frames per tile
+    int          vae_overlap;        // overlap frames per side
     const char * dump_dir;           // intermediate tensor dump dir (NULL = disabled)
 };
 
@@ -32,32 +39,70 @@ struct AceAudio {
 
 void ace_synth_default_params(AceSynthParams * p);
 
-// Load all models. NULL on failure.
-AceSynth * ace_synth_load(const AceSynthParams * params);
+// Build a lightweight synth context bound to a ModelStore. Reads DiT metadata
+// (config, silence, null_cond, is_turbo) through the store so text encoding
+// and T resolution can run before the DiT itself is ever loaded. All GPU
+// modules are acquired per op, never owned by the context. NULL on failure.
+AceSynth * ace_synth_load(ModelStore * store, const AceSynthParams * params);
 
-// Generate audio from N requests in a single GPU batch.
+// Phase 1: encode sources, build context, run all DiT denoising steps.
+// Modules are acquired as needed: VAE encoder for source and timbre, FSQ
+// tokenizer and detokenizer for cover-mode roundtrip, text encoder + cond
+// encoder for prompt embedding, DiT for denoising. In STRICT each module is
+// released before the next acquires, so VRAM hosts one at a time.
+// Produces a job that carries DiT latents in RAM for later VAE decoding.
 // reqs[batch_n]: each request has its own caption, lyrics, metadata, audio_codes, and seed.
-//   Text encoding runs per-element, results are padded and stacked for one DiT batch pass.
-//   seed must be resolved (non-negative) before calling this function.
 //   The first request (reqs[0]) is used for shared params (mode, duration, DiT settings).
-// src_audio: interleaved stereo 48kHz source content, NULL for text2music.
-// src_len: samples per channel for src_audio.
-// ref_audio: interleaved stereo 48kHz timbre reference, NULL = silence (no timbre conditioning).
-// ref_len: samples per channel for ref_audio.
+//   seed must be resolved (non-negative) before calling this function.
+// src_audio / ref_audio: interleaved stereo 48kHz buffers, NULL when not applicable.
+// src_latents / ref_latents: pre-encoded latents [T_latent * 64] f32 alternative
+//   to the matching audio buffer. When non-NULL, the corresponding VAE encoder
+//   pass is skipped. Mutually exclusive per side: when both audio and latents
+//   are provided for the same side, latents win and audio is ignored.
 // batch_n: number of requests (1..9).
-// out[batch_n] allocated by caller, filled with audio buffers.
 // cancel/cancel_data: abort callback, polled between DiT steps. NULL = never cancel.
+// Returns NULL on error or cancellation.
+AceSynthJob * ace_synth_job_run_dit(AceSynth *         ctx,
+                                    const AceRequest * reqs,
+                                    const float *      src_audio,
+                                    int                src_len,
+                                    const float *      src_latents,
+                                    int                src_T_latent,
+                                    const float *      ref_audio,
+                                    int                ref_len,
+                                    const float *      ref_latents,
+                                    int                ref_T_latent,
+                                    int                batch_n,
+                                    bool (*cancel)(void *) = nullptr,
+                                    void * cancel_data     = nullptr);
+
+// Latent T (frames) for the job, identical for every track in the batch.
+// Valid as soon as Phase 1 has run.
+int ace_synth_job_T_latent(const AceSynthJob * job);
+
+// Write the post-DiT denoised latent for one track of the job into dst,
+// time-major [T_latent, 64] f32. dst must hold T_latent * 64 floats. This is
+// the buffer the VAE decoder consumes to produce the track's output audio,
+// so feeding it back through /vae decode reproduces the same audio.
+void ace_synth_job_extract_latent(const AceSynthJob * job, int track_idx, float * dst);
+
+// Phase 2: VAE decode and waveform splice. Acquires the VAE decoder and FSQ
+// detokenizer from the store; in STRICT this evicts the DiT from phase 1
+// transparently.
+// splice_src / splice_len: interleaved stereo source reused for repaint/lego wave splicing.
+//   Pass NULL when the job did not carry a source audio.
+// out[batch_n] allocated by caller, filled with audio buffers.
 // Returns 0 on success, -1 on error or cancellation.
-int ace_synth_generate(AceSynth *         ctx,
-                       const AceRequest * reqs,
-                       const float *      src_audio,
-                       int                src_len,
-                       const float *      ref_audio,
-                       int                ref_len,
-                       int                batch_n,
-                       AceAudio *         out,
-                       bool (*cancel)(void *) = nullptr,
-                       void * cancel_data     = nullptr);
+int ace_synth_job_run_vae(AceSynth *    ctx,
+                          AceSynthJob * job,
+                          const float * splice_src,
+                          int           splice_len,
+                          AceAudio *    out,
+                          bool (*cancel)(void *) = nullptr,
+                          void * cancel_data     = nullptr);
+
+void ace_synth_job_free(AceSynthJob * job);
 
 void ace_audio_free(AceAudio * audio);
+
 void ace_synth_free(AceSynth * ctx);
