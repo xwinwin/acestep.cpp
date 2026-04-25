@@ -621,20 +621,23 @@ AceSynthJob * ace_synth_job_run_dit(AceSynth *         ctx,
     return NULL;
 }
 
-// Expose cover latents to the caller. Owned by the job, valid until
-// ace_synth_job_free. Returns NULL when the task did not produce cover
-// latents (text2music without source, or any error path before encode).
-const float * ace_synth_job_get_latents(const AceSynthJob * job, int * T_out) {
-    if (!job || !job->state.have_cover || job->state.T_cover <= 0) {
-        if (T_out) {
-            *T_out = 0;
+// Latent T for the job. Identical across batch elements (all tracks share T).
+int ace_synth_job_T_latent(const AceSynthJob * job) {
+    return job ? job->state.T : 0;
+}
+
+// Transpose s.output planar [Oc, T] for one track to time-major [T, Oc] in dst.
+// dst must hold T * Oc floats.
+void ace_synth_job_extract_latent(const AceSynthJob * job, int track_idx, float * dst) {
+    const SynthState & s   = job->state;
+    const int          T   = s.T;
+    const int          Oc  = s.Oc;
+    const float *      src = s.output.data() + (size_t) track_idx * Oc * T;
+    for (int t = 0; t < T; t++) {
+        for (int c = 0; c < Oc; c++) {
+            dst[t * Oc + c] = src[c * T + t];
         }
-        return NULL;
     }
-    if (T_out) {
-        *T_out = job->state.T_cover;
-    }
-    return job->state.cover_latents.data();
 }
 
 // Phase 2: VAE decode all batch items and apply waveform splice for

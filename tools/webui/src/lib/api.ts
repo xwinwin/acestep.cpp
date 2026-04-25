@@ -118,25 +118,26 @@ export async function jobResultJson(id: string): Promise<AceRequest[]> {
 	return res.json();
 }
 
-// Synth/vae-decode result. The server always replies multipart/mixed for
-// /synth (one audio part per generated track plus the cover latents when
-// produced) and raw audio for /vae decode path (single Content-Type, no
-// latents in the body since the client already holds the ones it uploaded).
+// Synth result. The server replies multipart/mixed with one audio part and
+// one latent part per generated track, paired by index. The /vae decode path
+// replies single-Content-Type (no latents in the body, the client already
+// holds the one it uploaded).
 export interface SynthResult {
 	audios: Blob[];
-	latents: Blob | null;
+	latents: Blob[];
 }
 
 // GET /job?id=X&result=1: fetch synth result. Multipart parts are discriminated
 // by their own Content-Type header: audio/* parts populate audios, the
-// application/octet-stream part is the cover latents. A single-Content-Type
-// response (/vae decode path) is returned as one audio part with no latents.
+// application/octet-stream parts populate latents in wire order. A single-
+// Content-Type response (/vae decode path) is returned as one audio with no
+// latents.
 export async function jobResultBlobs(id: string): Promise<SynthResult> {
 	const res = await fetch(`job?id=${encodeURIComponent(id)}&result=1`);
 	if (!res.ok) throw new Error(`${res.status} Result not ready`);
 	const ct = res.headers.get('Content-Type') || '';
 	if (!ct.startsWith('multipart/')) {
-		return { audios: [await res.blob()], latents: null };
+		return { audios: [await res.blob()], latents: [] };
 	}
 	const match = ct.match(/boundary=([^\s;]+)/);
 	if (!match) throw new Error('Missing boundary in multipart response');
@@ -145,8 +146,8 @@ export async function jobResultBlobs(id: string): Promise<SynthResult> {
 
 // GET /job?id=X&result=1: fetch understand result. The server replies
 // multipart/mixed with one application/json part (the AceRequest array) and
-// the cover latents. The latents are exposed via the second return so callers
-// can attach them to the originating Song.
+// one octet-stream part with the source latents. The latents are exposed via
+// the second return so callers can attach them to the originating Song.
 export interface UnderstandResult {
 	requests: AceRequest[];
 	latents: Blob | null;
@@ -243,18 +244,18 @@ function parseMultipartParts(buf: Uint8Array, boundary: string): MultipartPart[]
 	return results;
 }
 
-// Split typed parts into audio blobs and an optional latents blob. Audio parts
-// keep their per-part mime (audio/mpeg or audio/wav), the latents are the single
-// application/octet-stream part if present.
+// Split typed parts into audio blobs and latent blobs. Audio parts keep their
+// per-part mime (audio/mpeg or audio/wav). Audio and latent arrays grow in
+// wire order so audios[i] is paired with latents[i] for /synth responses.
 function parseMultipartTyped(buf: Uint8Array, boundary: string): SynthResult {
 	const parts = parseMultipartParts(buf, boundary);
 	const audios: Blob[] = [];
-	let latents: Blob | null = null;
+	const latents: Blob[] = [];
 	for (const part of parts) {
 		if (part.contentType.startsWith('audio/')) {
 			audios.push(part.body);
 		} else if (part.contentType.startsWith('application/octet-stream')) {
-			latents = part.body;
+			latents.push(part.body);
 		}
 	}
 	return { audios, latents };

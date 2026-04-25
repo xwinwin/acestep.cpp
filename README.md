@@ -127,14 +127,16 @@ Multipart only (source audio or pre-encoded latents required, optional request J
 
 **POST /vae** - Standalone VAE entrypoint: send `audio` to encode (latents
 out), send `src_latents` to decode (audio out). Multipart only, the two
-inputs are mutually exclusive. Lets the webui cache a cover latent on an
+inputs are mutually exclusive. Lets the webui cache a latent on an
 existing card, or play back a .vae file, without paying the LM cost of a
 full /synth or /understand pass.
 
-Synth and understand responses are multipart/mixed: the primary payload
-(audio tracks or JSON) plus the cover latent the pipeline produced. The
-client can replay that latent back into a later /synth or /understand call
-to skip the VAE encode entirely on subsequent jobs.
+Synth responses are multipart/mixed: one audio part and one latent part per
+generated track, paired in wire order. Understand responses are
+multipart/mixed too: one JSON part plus the latent of the input source
+audio. The client can replay any captured latent back as `src_latents` /
+`ref_latents` on a later /synth or /understand call to skip the VAE encode
+entirely, or feed it to /vae decode to reproduce the matching audio.
 
 **GET /health** - Returns `{"status":"ok"}`.
 

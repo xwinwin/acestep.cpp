@@ -258,19 +258,19 @@ static int latent_payload_validate(size_t size, int * http_code_out) {
     return T;
 }
 
-// Build a multipart/mixed body that bundles the primary payload (audio or
-// JSON) with the latent. Empty latent omits the latent part entirely. The
-// boundary is fixed and matches the existing batch format; the client splits
-// on it the same way for every endpoint.
+// Build a multipart/mixed body that bundles the primary payload with its
+// latents. The audio variant pairs one audio part with one latent part per
+// track, the JSON variant carries a single payload and one optional latent.
+// The boundary is fixed and matches the existing batch format; the client
+// splits on it the same way for every endpoint.
 static const char * MULTIPART_BOUNDARY = "ace-batch-boundary";
 
-static std::string multipart_build_audio_latent(const std::vector<std::string> & audio_parts,
-                                                const char *                     audio_mime,
-                                                const std::vector<float> &       latent,
-                                                int                              T_latent) {
+static std::string multipart_build_audio_latent(const std::vector<std::string> &        audio_parts,
+                                                const char *                            audio_mime,
+                                                const std::vector<std::vector<float>> & latents) {
     std::string body;
-    for (const auto & part : audio_parts) {
-        if (part.empty()) {
+    for (size_t i = 0; i < audio_parts.size(); i++) {
+        if (audio_parts[i].empty()) {
             continue;
         }
         body += "--";
@@ -278,15 +278,13 @@ static std::string multipart_build_audio_latent(const std::vector<std::string> &
         body += "\r\nContent-Type: ";
         body += audio_mime;
         body += "\r\n\r\n";
-        body += part;
+        body += audio_parts[i];
         body += "\r\n";
-    }
-    if (T_latent > 0 && !latent.empty()) {
         body += "--";
         body += MULTIPART_BOUNDARY;
         body += "\r\nContent-Type: application/octet-stream\r\n";
         body += "Content-Disposition: form-data; name=\"latent\"\r\n\r\n";
-        body.append(reinterpret_cast<const char *>(latent.data()), (size_t) T_latent * LATENT_FRAME_BYTES);
+        body.append(reinterpret_cast<const char *>(latents[i].data()), latents[i].size() * sizeof(float));
         body += "\r\n";
     }
     body += "--";
@@ -792,15 +790,14 @@ static void synth_worker(std::shared_ptr<Job>    job,
     // op (STRICT) or keeps them across ops (NEVER). The synth ctx is always
     // freed at the end of this handler. The runner ingests src and ref as
     // either audio or latents (latents win when both are set per side) and
-    // captures the cover latents that come out of phase 1 for the multipart
+    // captures one post-DiT latent per generated track for the multipart
     // response.
-    const float *      src_lat_ptr = src_latents.empty() ? nullptr : src_latents.data();
-    const float *      ref_lat_ptr = ref_latents.empty() ? nullptr : ref_latents.data();
-    std::vector<float> captured_latent;
-    int                captured_T_latent = 0;
+    const float *                   src_lat_ptr = src_latents.empty() ? nullptr : src_latents.data();
+    const float *                   ref_lat_ptr = ref_latents.empty() ? nullptr : ref_latents.data();
+    std::vector<std::vector<float>> captured_latents;
     const int rc = synth_batch_run(ctx, groups, src_interleaved, src_len, src_lat_ptr, src_T_latent, ref_interleaved,
-                                   ref_len, ref_lat_ptr, ref_T_latent, audio.data(), &captured_latent,
-                                   &captured_T_latent, server_cancel_job, (void *) &job->cancel);
+                                   ref_len, ref_lat_ptr, ref_T_latent, audio.data(), &captured_latents,
+                                   server_cancel_job, (void *) &job->cancel);
     ace_synth_free(ctx);
     free(src_interleaved);
     free(ref_interleaved);
@@ -850,10 +847,10 @@ static void synth_worker(std::shared_ptr<Job>    job,
     }
 
     // store result in job: every synth response is multipart, with one audio
-    // part per generated track plus the cover latent when the task produced
-    // one (text2music without source codes does not). The audio mime is
-    // per-part so the client knows wav vs mp3 without a query.
-    job->result_body = multipart_build_audio_latent(encoded, mime, captured_latent, captured_T_latent);
+    // part and one latent part per generated track, paired in wire order.
+    // The audio mime is per-part so the client knows wav vs mp3 without a
+    // query. The latent reproduces its track's audio when fed back to /vae.
+    job->result_body = multipart_build_audio_latent(encoded, mime, captured_latents);
     job->result_mime = MULTIPART_MIME;
 
     job->status.store(job->cancel.load() ? 3 : 1);
@@ -871,8 +868,10 @@ static void synth_worker(std::shared_ptr<Job>    job,
 //     part "ref_audio":   timbre reference audio (WAV or MP3), optional
 //     part "ref_latents": pre-encoded timbre latents (raw f32, [T*64]), wins over "ref_audio"
 // output: multipart/mixed
-//   one audio part per generated track (audio/mpeg or audio/wav per request output_format)
-//   one latent part (application/octet-stream, raw f32 [T*64]) when the task produced cover latents
+//   one audio part (audio/mpeg or audio/wav per request output_format) and
+//   one latent part (application/octet-stream, raw f32 [T*64]) per generated
+//   track, paired in wire order. The latent reproduces its track's audio when
+//   fed back to /vae decode.
 // Batch size = number of JSON objects (after synth_batch_size expansion, clamped to 9).
 // Metadata (seed, duration, etc) is already in the request JSON from /lm.
 static void handle_synth(const httplib::Request & req, httplib::Response & res) {

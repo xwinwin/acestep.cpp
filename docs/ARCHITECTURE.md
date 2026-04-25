@@ -927,8 +927,8 @@ GET  /job?id=N                  Poll job status
 
 GET  /job?id=N&result=1         Fetch job result
   lm:         application/json [AceRequest, ...]
-  synth:      multipart/mixed (one audio part per track + cover latent part)
-  understand: multipart/mixed (one json part + cover latent part)
+  synth:      multipart/mixed (one audio part + one latent part per track, paired)
+  understand: multipart/mixed (one json part + one latent part for the source)
   vae encode: application/octet-stream (raw .vae bytes, no audio echo: client already has it)
   vae decode: audio/mpeg or audio/wav (raw, no latent echo: client already has it)
 

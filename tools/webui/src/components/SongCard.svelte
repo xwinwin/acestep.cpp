@@ -88,8 +88,8 @@
 
 	// analyze audio: send to /understand, fill form with detected metadata.
 	// persists the job under 'lm' key so page reload resumes polling.
-	// Uploads the cached cover latents when present so the server skips the
-	// VAE encode. Understand is the canonical "complete this raw audio" op:
+	// Uploads the cached latents when present so the server skips the VAE
+	// encode. Understand is the canonical "complete this raw audio" op:
 	// the source card is enriched in place with both outputs the server
 	// produced for it, the latents that fed the FSQ tokenizer and the
 	// detected metadata (caption, lyrics, codes, bpm, ...). Cover and synth

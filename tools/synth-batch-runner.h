@@ -27,12 +27,9 @@
 // audio_out[sum_g(groups[g].size())]: pre-allocated slots filled by phase 2.
 //   On error, slots completed before the failure keep their audio; the rest
 //   are left at {NULL, 0, 0}. Caller owns ace_audio_free.
-// latent_out / T_latent_out: optional capture of the cover latents produced
-//   (or ingested) by the first group. All groups within one call share the
-//   same source so a single latent buffer is sufficient. Pass NULL to skip
-//   the capture. On success and when the source path produced latents,
-//   *latent_out is filled (move-assigned) and *T_latent_out is set; otherwise
-//   *latent_out is left empty and *T_latent_out is set to 0.
+// latents_out: optional capture of one post-DiT latent per generated track,
+//   indexed identically to audio_out. Each entry is [T_track * 64] f32 time-major,
+//   T_track = entry.size() / 64. Pass NULL to skip the capture.
 // Returns 0 on success, -1 on any error or cancellation.
 static int synth_batch_run(AceSynth *                             ctx,
                            std::vector<std::vector<AceRequest>> & groups,
@@ -45,19 +42,15 @@ static int synth_batch_run(AceSynth *                             ctx,
                            const float *                          ref_latents,
                            int                                    ref_T_latent,
                            AceAudio *                             audio_out,
-                           std::vector<float> *                   latent_out   = nullptr,
-                           int *                                  T_latent_out = nullptr,
-                           bool (*cancel)(void *)                              = nullptr,
-                           void * cancel_data                                  = nullptr) {
+                           std::vector<std::vector<float>> *      latents_out = nullptr,
+                           bool (*cancel)(void *)                             = nullptr,
+                           void * cancel_data                                 = nullptr) {
     const int                  n_groups = (int) groups.size();
     std::vector<AceSynthJob *> jobs(n_groups, nullptr);
     std::vector<int>           audio_off(n_groups, 0);
 
-    if (latent_out) {
-        latent_out->clear();
-    }
-    if (T_latent_out) {
-        *T_latent_out = 0;
+    if (latents_out) {
+        latents_out->clear();
     }
 
     // Phase 1: denoising loop for each group. The DiT is acquired and released
@@ -77,16 +70,19 @@ static int synth_batch_run(AceSynth *                             ctx,
         off += gn;
     }
 
-    // Capture cover latents from the first group: source is shared across
-    // groups so one buffer covers them all. Skipped when the caller did not
-    // request capture or when the task did not produce cover latents.
-    if (latent_out && n_groups > 0) {
-        int           captured_T = 0;
-        const float * captured   = ace_synth_job_get_latents(jobs[0], &captured_T);
-        if (captured && captured_T > 0) {
-            latent_out->assign(captured, captured + (size_t) captured_T * 64);
-            if (T_latent_out) {
-                *T_latent_out = captured_T;
+    // Capture one post-DiT latent per track, time-major [T*64], indexed to
+    // match audio_out. Latents live in jobs[g]->state.output until run_vae
+    // frees the job; extraction happens before phase 2.
+    if (latents_out) {
+        const int total = off;
+        latents_out->resize((size_t) total);
+        for (int g = 0; g < n_groups; g++) {
+            const int gn = (int) groups[g].size();
+            const int T  = ace_synth_job_T_latent(jobs[g]);
+            for (int i = 0; i < gn; i++) {
+                std::vector<float> & dst = (*latents_out)[audio_off[g] + i];
+                dst.resize((size_t) T * 64);
+                ace_synth_job_extract_latent(jobs[g], i, dst.data());
             }
         }
     }

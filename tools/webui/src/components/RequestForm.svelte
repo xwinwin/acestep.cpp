@@ -181,7 +181,7 @@
 							duration: t.duration,
 							request: t.request,
 							audio: audios[i],
-							...(latents ? { latents } : {})
+							latents: latents[i]
 						};
 						await putSong(song);
 					}
@@ -449,9 +449,9 @@
 			const baseName = app.name || 'Untitled';
 
 			// submit job, poll until done, fetch result. When the source song
-			// or timbre reference already carries cached cover latents, we
-			// upload those instead of the audio: the server skips the matching
-			// VAE encode entirely.
+			// or timbre reference already carries cached latents, we upload
+			// those instead of the audio: the server skips the matching VAE
+			// encode entirely.
 			const jobId =
 				srcSong || refSong
 					? await synthSubmitWithAudio(
@@ -493,7 +493,7 @@
 					duration: r.duration || 0,
 					request: r,
 					audio: audios[i],
-					...(latents ? { latents } : {})
+					latents: latents[i]
 				} as Song;
 				song.id = await putSong(song);
 				app.songs.unshift(song);
